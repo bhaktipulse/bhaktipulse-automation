@@ -1,0 +1,16 @@
+google-generativeai
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+requests
+Pillow
+numpy
+soundfile
+torch
+torchaudio
+transformers
+sentencepiece
+safetensors
+huggingface_hub
+f5-tts
