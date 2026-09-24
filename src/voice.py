@@ -13,9 +13,10 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 VOICE_PATH = OUTPUT_DIR / "voice.wav"
 
-REF_AUDIO = os.environ["INDICF5_REF_AUDIO"]
-REF_TEXT = os.environ["INDICF5_REF_TEXT"]
+# Reference voice stored inside the repository
+REF_AUDIO = Path("assets/voice/telugu_reference.wav")
 
+REF_TEXT = os.environ["INDICF5_REF_TEXT"]
 
 _model = None
 
@@ -38,7 +39,7 @@ def generate_voice(voice_script: str):
             "VOICE_GENERATION_FAILED: voice script is empty"
         )
 
-    if not Path(REF_AUDIO).exists():
+    if not REF_AUDIO.exists():
         raise RuntimeError(
             f"VOICE_GENERATION_FAILED: reference audio not found: {REF_AUDIO}"
         )
@@ -47,7 +48,7 @@ def generate_voice(voice_script: str):
 
     audio = model(
         voice_script,
-        ref_audio_path=REF_AUDIO,
+        ref_audio_path=str(REF_AUDIO),
         ref_text=REF_TEXT
     )
 
