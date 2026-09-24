@@ -1,0 +1,16 @@
+.env
+*.env
+__pycache__/
+*.pyc
+output/*
+!output/.gitkeep
+*.mp4
+*.mp3
+*.wav
+!assets/voice/telugu_reference.wav
+*.jpg
+*.jpeg
+*.png
+credentials.json
+token.json
+client_secret*.json
