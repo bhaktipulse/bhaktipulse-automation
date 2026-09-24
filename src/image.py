@@ -1,4 +1,5 @@
 import os
+import base64
 import requests
 from pathlib import Path
 
@@ -9,49 +10,51 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 IMAGE_PATH = OUTPUT_DIR / "devotional.png"
 
+MODEL = "gemini-3.1-flash-image"
+
 
 def generate_image(image_prompt: str):
     prompt = f"""
 Create a high-quality devotional image for BhaktiPulse.
 
-IMPORTANT:
-- Follow the requested deity/festival/topic exactly.
-- Do NOT substitute another deity.
+Follow the requested subject EXACTLY.
+
+Requirements:
+- Exact deity, festival or devotional subject requested.
+- Do not substitute another deity.
 - Traditional Indian devotional appearance.
 - Respectful and spiritually appropriate.
-- Photorealistic cinematic devotional artwork.
-- Rich natural lighting.
-- Detailed face, hands and ornaments.
-- Clean composition.
-- Vertical 9:16.
+- High-quality cinematic devotional artwork.
+- Detailed face, hands, ornaments and clothing.
+- Natural lighting.
+- Beautiful devotional atmosphere.
+- Clean composition suitable for YouTube Shorts.
+- Vertical 9:16 composition.
 - No text.
 - No captions.
 - No watermark.
 - No logo.
 - No border.
 
-Subject:
+Requested subject:
 {image_prompt}
 """
 
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/"
-        "models/gemini-2.5-flash-image-preview:generateContent"
-        f"?key={GEMINI_API_KEY}"
-    )
+    url = "https://generativelanguage.googleapis.com/v1beta/interactions"
 
     response = requests.post(
         url,
+        headers={
+            "x-goog-api-key": GEMINI_API_KEY,
+            "Content-Type": "application/json"
+        },
         json={
-            "contents": [
-                {
-                    "parts": [
-                        {"text": prompt}
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "responseModalities": ["TEXT", "IMAGE"]
+            "model": MODEL,
+            "input": prompt,
+            "response_format": {
+                "type": "image",
+                "aspect_ratio": "9:16",
+                "image_size": "1K"
             }
         },
         timeout=180
@@ -61,30 +64,27 @@ Subject:
 
     data = response.json()
 
-    candidates = data.get("candidates", [])
+    output_image = data.get("output_image")
 
-    if not candidates:
-        raise RuntimeError("IMAGE_GENERATION_FAILED: no candidates")
+    if not output_image:
+        raise RuntimeError(
+            "IMAGE_GENERATION_FAILED: no output image returned"
+        )
 
-    parts = candidates[0].get("content", {}).get("parts", [])
+    image_data = output_image.get("data")
 
-    for part in parts:
-        inline_data = part.get("inlineData")
+    if not image_data:
+        raise RuntimeError(
+            "IMAGE_GENERATION_FAILED: image data missing"
+        )
 
-        if inline_data and inline_data.get("data"):
-            image_bytes = __import__("base64").b64decode(
-                inline_data["data"]
-            )
+    image_bytes = base64.b64decode(image_data)
 
-            IMAGE_PATH.write_bytes(image_bytes)
+    IMAGE_PATH.write_bytes(image_bytes)
 
-            if IMAGE_PATH.stat().st_size < 10_000:
-                raise RuntimeError(
-                    "IMAGE_VALIDATION_FAILED: image file too small"
-                )
+    if IMAGE_PATH.stat().st_size < 10_000:
+        raise RuntimeError(
+            "IMAGE_VALIDATION_FAILED: image file too small"
+        )
 
-            return str(IMAGE_PATH)
-
-    raise RuntimeError(
-        "IMAGE_GENERATION_FAILED: no image returned"
-    )
+    return str(IMAGE_PATH)
