@@ -9,7 +9,7 @@ from src.youtube import schedule_video, tomorrow_0630_ist
 
 
 def main():
-    print("BHaktiPulse automation started")
+    print("BhaktiPulse automation started")
 
     target_date = date.today().isoformat()
 
@@ -54,7 +54,7 @@ def main():
 
     print("")
     print("====================================")
-    print("BHaktiPulse AUTOMATION SUCCESS")
+    print("BhaktiPulse AUTOMATION SUCCESS")
     print("====================================")
     print(f"Video ID: {video_id}")
     print(f"Scheduled: {publish_at}")
@@ -67,7 +67,7 @@ if __name__ == "__main__":
     except Exception as error:
         print("")
         print("====================================")
-        print("BHaktiPulse AUTOMATION BLOCKED")
+        print("BhaktiPulse AUTOMATION BLOCKED")
         print("====================================")
         print(str(error))
         print("====================================")
