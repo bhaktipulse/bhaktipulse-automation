@@ -1,199 +1,100 @@
 import os
-import base64
-import time
-import requests
 from pathlib import Path
 
+from huggingface_hub import InferenceClient
 
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+
+HF_TOKEN = os.environ["HF_TOKEN"]
 
 OUTPUT_DIR = Path("output")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 IMAGE_PATH = OUTPUT_DIR / "devotional.png"
 
-
-IMAGE_MODEL = "gemini-3.1-flash-image"
+MODEL = "black-forest-labs/FLUX.1-schnell"
 
 
 def generate_image(image_prompt: str):
 
-    prompt = f"""
-Create a high-quality devotional image for BhaktiPulse.
+    if not image_prompt.strip():
+        raise RuntimeError(
+            "IMAGE_GENERATION_FAILED: image prompt is empty"
+        )
 
-Follow the requested subject EXACTLY.
+    prompt = f"""
+Create a high-quality Indian devotional artwork.
+
+IMPORTANT:
+Follow the requested deity or devotional subject EXACTLY.
 
 Requirements:
-- Exact deity, festival or devotional subject requested.
-- Do not substitute another deity.
+- Exact requested deity/topic.
 - Traditional Indian devotional appearance.
-- Respectful and spiritually appropriate.
-- High-quality cinematic devotional artwork.
+- Respectful spiritual presentation.
 - Detailed face, hands, ornaments and clothing.
-- Natural lighting.
-- Beautiful devotional atmosphere.
-- Clean composition suitable for YouTube Shorts.
-- Vertical 9:16 composition.
+- Beautiful devotional lighting.
+- Rich but natural colors.
+- Cinematic devotional artwork.
+- Clean composition.
+- Designed for a vertical YouTube Short.
+- 9:16 portrait composition.
 - No text.
+- No letters.
 - No captions.
 - No watermark.
 - No logo.
 - No border.
+- No extra deity.
+- No unrelated objects.
 
 Requested subject:
 {image_prompt}
 """
 
-    url = (
-        "https://generativelanguage.googleapis.com/"
-        f"v1/models/{IMAGE_MODEL}:generateContent"
+    print(
+        f"Generating image with Hugging Face: {MODEL}"
     )
 
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text": prompt
-                    }
-                ]
-            }
-        ],
-        "generationConfig": {
-            "responseModalities": [
-                "IMAGE"
-            ],
-            "responseFormat": {
-                "image": {
-                    "aspectRatio": "9:16",
-                    "imageSize": "1K"
-                }
-            }
-        }
-    }
+    try:
 
-    last_error = None
-
-    for attempt in range(3):
-
-        print(
-            f"Image generation attempt {attempt + 1}/3"
+        client = InferenceClient(
+            api_key=HF_TOKEN
         )
 
-        try:
+        image = client.text_to_image(
+            prompt=prompt,
+            model=MODEL
+        )
 
-            response = requests.post(
-                url,
-                headers={
-                    "x-goog-api-key": GEMINI_API_KEY,
-                    "Content-Type": "application/json"
-                },
-                json=payload,
-                timeout=180
+        if image is None:
+            raise RuntimeError(
+                "IMAGE_GENERATION_FAILED: "
+                "no image returned"
             )
 
-            if response.status_code == 429:
+        image.save(IMAGE_PATH)
 
-                print(
-                    "Image API returned HTTP 429. "
-                    "Waiting before retry..."
-                )
+    except Exception as error:
 
-                last_error = (
-                    "HTTP 429: Too Many Requests"
-                )
+        raise RuntimeError(
+            "IMAGE_GENERATION_FAILED: "
+            + str(error)
+        )
 
-                if attempt < 2:
-                    time.sleep(
-                        20 * (attempt + 1)
-                    )
+    if not IMAGE_PATH.exists():
+        raise RuntimeError(
+            "IMAGE_VALIDATION_FAILED: "
+            "image file was not created"
+        )
 
-                continue
+    if IMAGE_PATH.stat().st_size < 10_000:
+        raise RuntimeError(
+            "IMAGE_VALIDATION_FAILED: "
+            "image file is too small"
+        )
 
-            response.raise_for_status()
-
-            data = response.json()
-
-            candidates = data.get(
-                "candidates",
-                []
-            )
-
-            if not candidates:
-                raise RuntimeError(
-                    "IMAGE_GENERATION_FAILED: "
-                    "no candidates returned"
-                )
-
-            parts = (
-                candidates[0]
-                .get("content", {})
-                .get("parts", [])
-            )
-
-            image_data = None
-
-            for part in parts:
-
-                inline_data = part.get(
-                    "inlineData"
-                )
-
-                if inline_data:
-
-                    image_data = inline_data.get(
-                        "data"
-                    )
-
-                    if image_data:
-                        break
-
-            if not image_data:
-
-                raise RuntimeError(
-                    "IMAGE_GENERATION_FAILED: "
-                    "no image data returned"
-                )
-
-            image_bytes = base64.b64decode(
-                image_data
-            )
-
-            IMAGE_PATH.write_bytes(
-                image_bytes
-            )
-
-            if IMAGE_PATH.stat().st_size < 10_000:
-
-                raise RuntimeError(
-                    "IMAGE_VALIDATION_FAILED: "
-                    "image file too small"
-                )
-
-            print(
-                "Gemini image generation succeeded"
-            )
-
-            print(
-                f"Image saved: {IMAGE_PATH}"
-            )
-
-            return str(IMAGE_PATH)
-
-        except Exception as error:
-
-            last_error = str(error)
-
-            print(
-                f"Image generation failed: {error}"
-            )
-
-            if attempt < 2:
-                time.sleep(
-                    20 * (attempt + 1)
-                )
-
-    raise RuntimeError(
-        "IMAGE_GENERATION_FAILED: "
-        + str(last_error)
+    print(
+        f"Image generated successfully: {IMAGE_PATH}"
     )
+
+    return str(IMAGE_PATH)
