@@ -13,11 +13,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 IMAGE_PATH = OUTPUT_DIR / "devotional.png"
 
 
-# Try image models in this order.
-IMAGE_MODELS = [
-    "gemini-3.1-flash-image",
-    "gemini-3.0-flash-image",
-]
+IMAGE_MODEL = "gemini-3.1-flash-image"
 
 
 def generate_image(image_prompt: str):
@@ -48,122 +44,156 @@ Requested subject:
 {image_prompt}
 """
 
+    url = (
+        "https://generativelanguage.googleapis.com/"
+        f"v1/models/{IMAGE_MODEL}:generateContent"
+    )
+
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "responseModalities": [
+                "IMAGE"
+            ],
+            "responseFormat": {
+                "image": {
+                    "aspectRatio": "9:16",
+                    "imageSize": "1K"
+                }
+            }
+        }
+    }
+
     last_error = None
 
-    for model in IMAGE_MODELS:
+    for attempt in range(3):
 
-        print(f"Trying image model: {model}")
+        print(
+            f"Image generation attempt {attempt + 1}/3"
+        )
 
-        for attempt in range(3):
+        try:
 
-            try:
+            response = requests.post(
+                url,
+                headers={
+                    "x-goog-api-key": GEMINI_API_KEY,
+                    "Content-Type": "application/json"
+                },
+                json=payload,
+                timeout=180
+            )
 
-                print(
-                    f"Image attempt {attempt + 1}/3"
-                )
-
-                url = (
-                    "https://generativelanguage.googleapis.com/"
-                    "v1beta/interactions"
-                )
-
-                response = requests.post(
-                    url,
-                    headers={
-                        "x-goog-api-key": GEMINI_API_KEY,
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": model,
-                        "input": prompt,
-                        "response_format": {
-                            "type": "image",
-                            "aspect_ratio": "9:16",
-                            "image_size": "1K"
-                        }
-                    },
-                    timeout=180
-                )
-
-                if response.status_code == 429:
-
-                    print(
-                        f"Image model {model}: "
-                        "HTTP 429 - retrying..."
-                    )
-
-                    time.sleep(
-                        15 * (attempt + 1)
-                    )
-
-                    continue
-
-                response.raise_for_status()
-
-                data = response.json()
-
-                output_image = data.get(
-                    "output_image"
-                )
-
-                if not output_image:
-
-                    raise RuntimeError(
-                        "IMAGE_GENERATION_FAILED: "
-                        "no output image returned"
-                    )
-
-                image_data = output_image.get(
-                    "data"
-                )
-
-                if not image_data:
-
-                    raise RuntimeError(
-                        "IMAGE_GENERATION_FAILED: "
-                        "image data missing"
-                    )
-
-                image_bytes = base64.b64decode(
-                    image_data
-                )
-
-                IMAGE_PATH.write_bytes(
-                    image_bytes
-                )
-
-                if IMAGE_PATH.stat().st_size < 10_000:
-
-                    raise RuntimeError(
-                        "IMAGE_VALIDATION_FAILED: "
-                        "image file too small"
-                    )
+            if response.status_code == 429:
 
                 print(
-                    f"Image model succeeded: {model}"
+                    "Image API returned HTTP 429. "
+                    "Waiting before retry..."
                 )
-
-                return str(IMAGE_PATH)
-
-            except Exception as error:
 
                 last_error = (
-                    f"{model}, attempt "
-                    f"{attempt + 1}: {error}"
+                    "HTTP 429: Too Many Requests"
                 )
-
-                print(last_error)
 
                 if attempt < 2:
                     time.sleep(
-                        15 * (attempt + 1)
+                        20 * (attempt + 1)
                     )
 
-        print(
-            f"Image model failed completely: {model}"
-        )
+                continue
+
+            response.raise_for_status()
+
+            data = response.json()
+
+            candidates = data.get(
+                "candidates",
+                []
+            )
+
+            if not candidates:
+                raise RuntimeError(
+                    "IMAGE_GENERATION_FAILED: "
+                    "no candidates returned"
+                )
+
+            parts = (
+                candidates[0]
+                .get("content", {})
+                .get("parts", [])
+            )
+
+            image_data = None
+
+            for part in parts:
+
+                inline_data = part.get(
+                    "inlineData"
+                )
+
+                if inline_data:
+
+                    image_data = inline_data.get(
+                        "data"
+                    )
+
+                    if image_data:
+                        break
+
+            if not image_data:
+
+                raise RuntimeError(
+                    "IMAGE_GENERATION_FAILED: "
+                    "no image data returned"
+                )
+
+            image_bytes = base64.b64decode(
+                image_data
+            )
+
+            IMAGE_PATH.write_bytes(
+                image_bytes
+            )
+
+            if IMAGE_PATH.stat().st_size < 10_000:
+
+                raise RuntimeError(
+                    "IMAGE_VALIDATION_FAILED: "
+                    "image file too small"
+                )
+
+            print(
+                "Gemini image generation succeeded"
+            )
+
+            print(
+                f"Image saved: {IMAGE_PATH}"
+            )
+
+            return str(IMAGE_PATH)
+
+        except Exception as error:
+
+            last_error = str(error)
+
+            print(
+                f"Image generation failed: {error}"
+            )
+
+            if attempt < 2:
+                time.sleep(
+                    20 * (attempt + 1)
+                )
 
     raise RuntimeError(
-        "ALL_IMAGE_MODELS_FAILED: "
+        "IMAGE_GENERATION_FAILED: "
         + str(last_error)
     )
