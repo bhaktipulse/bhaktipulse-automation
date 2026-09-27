@@ -24,5 +24,9 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run automation
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INDICF5_REF_TEXT: ${{ secrets.INDICF5_REF_TEXT }}
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
         run: |
           python main.py
