@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -32,12 +33,13 @@ def run_command(command, error_name):
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        text=True
     )
 
     if result.returncode != 0:
         print(result.stdout)
         print(result.stderr)
+
         raise RuntimeError(
             f"{error_name}: command failed"
         )
@@ -45,14 +47,59 @@ def run_command(command, error_name):
     return result
 
 
-def clean_text(text):
-    return " ".join(
-        str(text).strip().split()
+def prepare_telugu_text(text):
+    """
+    Prepare Telugu narration for natural sentence flow.
+
+    Important:
+    - Do not break words with artificial punctuation.
+    - Keep words that belong together in the same phrase.
+    - Use commas only for natural short pauses.
+    - Use full stops only for real sentence boundaries.
+    """
+
+    text = str(text).strip()
+
+    if not text:
+        raise RuntimeError(
+            "VOICE_GENERATION_FAILED: empty text"
+        )
+
+    # Normalize line breaks/tabs to spaces.
+    text = re.sub(r"[\r\n\t]+", " ", text)
+
+    # Collapse repeated spaces.
+    text = re.sub(r"\s+", " ", text)
+
+    # Remove accidental spaces before punctuation.
+    text = re.sub(r"\s+([,.!?;:])", r"\1", text)
+
+    # Remove repeated punctuation.
+    text = re.sub(r"[.]{2,}", ".", text)
+    text = re.sub(r"[,]{2,}", ",", text)
+
+    # Do NOT allow commas to split very short joined Telugu phrases.
+    text = re.sub(
+        r"([అ-హా-ౌ])\s*,\s*([అ-హా-ౌ])",
+        r"\1 \2",
+        text
     )
+
+    # Remove unnecessary punctuation between Telugu words.
+    text = re.sub(
+        r"([ఀ-౿])\s*[-–—]\s*([ఀ-౿])",
+        r"\1 \2",
+        text
+    )
+
+    # Keep one clean space between words.
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
 
 
 def create_piper_audio(text, output_path):
-    text = clean_text(text)
+    text = prepare_telugu_text(text)
 
     if not text:
         raise RuntimeError(
@@ -75,18 +122,37 @@ def create_piper_audio(text, output_path):
 
     output_path = Path(output_path)
 
+    print("Piper narration text:")
+    print(text)
+
     result = subprocess.run(
         [
             piper,
             "--model",
             str(model_path),
+
+            # Slightly faster and more natural flow.
+            "--length_scale",
+            "0.92",
+
+            # Reduce excessive phoneme-duration variation.
+            "--noise_w",
+            "0.35",
+
+            "--noise_scale",
+            "0.667",
+
+            # Do not add an artificial sentence gap.
+            "--sentence_silence",
+            "0",
+
             "--output_file",
             str(output_path),
         ],
         input=text,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        text=True
     )
 
     if result.returncode != 0:
@@ -107,7 +173,7 @@ def create_piper_audio(text, output_path):
 
 
 def create_narration(text):
-    print("Generating Telugu neural narration...")
+    print("Generating clean Telugu narration...")
 
     create_piper_audio(
         text,
@@ -118,7 +184,7 @@ def create_narration(text):
 
 
 def create_final_audio(narration):
-    print("Using clean Telugu narration only...")
+    print("Processing clean Telugu narration...")
 
     run_command(
         [
@@ -134,7 +200,7 @@ def create_final_audio(narration):
             "2",
             str(VOICE_WAV),
         ],
-        "AUDIO_PROCESSING_FAILED",
+        "AUDIO_PROCESSING_FAILED"
     )
 
     validate_audio(
@@ -154,7 +220,7 @@ def create_final_audio(narration):
             "192k",
             str(VOICE_MP3),
         ],
-        "VOICE_MP3_FAILED",
+        "VOICE_MP3_FAILED"
     )
 
     validate_audio(
@@ -168,7 +234,7 @@ def create_final_audio(narration):
 
 
 def generate_voice(text):
-    text = clean_text(text)
+    text = prepare_telugu_text(text)
 
     if not text:
         raise RuntimeError(
