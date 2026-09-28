@@ -34,7 +34,6 @@ HF_TOKEN = os.environ["HF_TOKEN"]
 
 _model = None
 _vocoder = None
-_vocab_path = None
 
 
 def get_device():
@@ -54,7 +53,6 @@ def load_indicf5():
 
     global _model
     global _vocoder
-    global _vocab_path
 
     if _model is not None:
         return _model, _vocoder
@@ -75,13 +73,11 @@ def load_indicf5():
         token=HF_TOKEN
     )
 
-    checkpoint_path = hf_hub_download(
+    ckpt_path = hf_hub_download(
         repo_id=MODEL_REPO,
         filename="model.safetensors",
         token=HF_TOKEN
     )
-
-    _vocab_path = vocab_path
 
     print(
         "Loading Vocos vocoder..."
@@ -94,7 +90,7 @@ def load_indicf5():
     )
 
     print(
-        "Loading IndicF5 model..."
+        "Loading IndicF5 model architecture..."
     )
 
     _model = load_model(
@@ -109,9 +105,38 @@ def load_indicf5():
         ),
         mel_spec_type="vocos",
         vocab_file=vocab_path,
-        ckpt_file=checkpoint_path,
         device=device
     )
+
+    print(
+        "Loading IndicF5 checkpoint weights..."
+    )
+
+    state_dict = load_file(
+        ckpt_path,
+        device=device
+    )
+
+    state_dict = {
+        key.replace(
+            "ema_model._orig_mod.",
+            ""
+        ): value
+        for key, value in state_dict.items()
+        if key.startswith("ema_model.")
+    }
+
+    if not state_dict:
+        raise RuntimeError(
+            "VOICE_MODEL_LOAD_FAILED: "
+            "No ema_model weights found in checkpoint"
+        )
+
+    _model.load_state_dict(
+        state_dict
+    )
+
+    _model.eval()
 
     print(
         "IndicF5 model loaded successfully"
@@ -193,7 +218,7 @@ def generate_voice(voice_script: str):
         )
 
     print(
-        f"Telugu voice generated successfully: "
+        "Telugu voice generated successfully: "
         f"{VOICE_PATH}"
     )
 
