@@ -210,6 +210,146 @@ def load_indicf5():
     return _model, _vocoder
 
 
+def clean_telugu_script(text):
+
+    text = " ".join(
+        text.strip().split()
+    )
+
+    replacements = {
+        " ,": ",",
+        " .": ".",
+        " ।": "।",
+        " !": "!",
+        " ?": "?",
+        " ;": ";",
+        " :": ":",
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    return text.strip()
+
+
+def split_telugu_script(text):
+
+    text = clean_telugu_script(text)
+
+    if not text:
+        return []
+
+    separators = [
+        "।",
+        ".",
+        "?",
+        "!",
+        ";",
+    ]
+
+    sentences = [text]
+
+    for separator in separators:
+
+        next_sentences = []
+
+        for part in sentences:
+
+            pieces = part.split(separator)
+
+            for index, piece in enumerate(pieces):
+
+                piece = piece.strip()
+
+                if not piece:
+                    continue
+
+                if index < len(pieces) - 1:
+                    piece += separator
+
+                next_sentences.append(piece)
+
+        sentences = next_sentences
+
+    chunks = []
+
+    for sentence in sentences:
+
+        words = sentence.split()
+
+        if not words:
+            continue
+
+        current = []
+
+        for word in words:
+
+            current.append(word)
+
+            joined = " ".join(current)
+
+            if len(joined) >= 75:
+
+                chunks.append(joined)
+                current = []
+
+        if current:
+            chunks.append(
+                " ".join(current)
+            )
+
+    return chunks
+
+
+def normalize_audio(audio):
+
+    audio = np.asarray(
+        audio,
+        dtype=np.float32
+    )
+
+    if audio.size == 0:
+        return audio
+
+    audio = np.nan_to_num(
+        audio,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0
+    )
+
+    peak = float(
+        np.max(np.abs(audio))
+    )
+
+    if peak > 0.98:
+
+        audio = (
+            audio / peak
+        ) * 0.95
+
+    return audio
+
+
+def add_silence(audio, sample_rate, seconds):
+
+    count = int(
+        sample_rate * seconds
+    )
+
+    if count <= 0:
+        return audio
+
+    silence = np.zeros(
+        count,
+        dtype=np.float32
+    )
+
+    return np.concatenate(
+        [audio, silence]
+    )
+
+
 def generate_voice(voice_script: str):
 
     if not voice_script.strip():
@@ -243,48 +383,95 @@ def generate_voice(voice_script: str):
         "Telugu reference audio prepared."
     )
 
-    print(
-        "Generating Telugu voice..."
+    chunks = split_telugu_script(
+        voice_script
     )
 
-    with torch.inference_mode():
-
-        audio, sample_rate, _ = infer_process(
-            ref_audio,
-            ref_text,
-            voice_script,
-            model,
-            vocoder,
-            mel_spec_type="vocos",
-            device=device
-        )
-
-    if audio is None:
+    if not chunks:
         raise RuntimeError(
             "VOICE_GENERATION_FAILED: "
-            "IndicF5 returned no audio"
+            "no usable Telugu chunks"
         )
 
-    audio = np.asarray(
-        audio,
-        dtype=np.float32
+    print(
+        f"Generating Telugu voice in "
+        f"{len(chunks)} controlled chunks..."
     )
 
-    if audio.size == 0:
-        raise RuntimeError(
-            "VOICE_VALIDATION_FAILED: "
-            "generated audio is empty"
+    generated_parts = []
+
+    output_sample_rate = 24000
+
+    for index, chunk in enumerate(chunks):
+
+        print(
+            f"VOICE CHUNK "
+            f"{index + 1}/{len(chunks)}: "
+            f"{chunk}"
         )
 
-    output_sample_rate = (
-        int(sample_rate)
-        if sample_rate
-        else 24000
+        with torch.inference_mode():
+
+            audio, sample_rate, _ = infer_process(
+                ref_audio,
+                ref_text,
+                chunk,
+                model,
+                vocoder,
+                mel_spec_type="vocos",
+                device=device
+            )
+
+        if audio is None:
+            raise RuntimeError(
+                "VOICE_GENERATION_FAILED: "
+                f"IndicF5 returned no audio "
+                f"for chunk {index + 1}"
+            )
+
+        audio = normalize_audio(
+            audio
+        )
+
+        if audio.size == 0:
+            raise RuntimeError(
+                "VOICE_GENERATION_FAILED: "
+                f"empty audio for chunk {index + 1}"
+            )
+
+        output_sample_rate = (
+            int(sample_rate)
+            if sample_rate
+            else 24000
+        )
+
+        generated_parts.append(
+            audio
+        )
+
+        if index < len(chunks) - 1:
+
+            generated_parts.append(
+                np.zeros(
+                    int(
+                        output_sample_rate
+                        * 0.32
+                    ),
+                    dtype=np.float32
+                )
+            )
+
+    final_audio = np.concatenate(
+        generated_parts
+    )
+
+    final_audio = normalize_audio(
+        final_audio
     )
 
     sf.write(
         VOICE_PATH,
-        audio,
+        final_audio,
         samplerate=output_sample_rate
     )
 
@@ -300,9 +487,19 @@ def generate_voice(voice_script: str):
             "audio file is too small"
         )
 
+    duration = (
+        len(final_audio)
+        / output_sample_rate
+    )
+
     print(
         f"Telugu voice generated successfully: "
         f"{VOICE_PATH}"
+    )
+
+    print(
+        f"Voice duration: "
+        f"{duration:.2f} seconds"
     )
 
     return str(VOICE_PATH)
