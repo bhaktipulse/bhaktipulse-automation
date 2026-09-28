@@ -17,7 +17,9 @@ MODELS = [
 
 def normalize_title(title):
 
-    title = " ".join(title.strip().split())
+    title = " ".join(
+        title.strip().split()
+    )
 
     if len(title) <= 60:
         return title
@@ -56,70 +58,82 @@ def normalize_title(title):
 def generate_content(target_date: str):
 
     prompt = f"""
-You are the BhaktiPulse daily devotional content planner.
+You are the BhaktiPulse daily devotional Short planner.
 
 Target date: {target_date}
 
-Create ONE original devotional YouTube Short for this date.
+Create ONE original Hindu devotional YouTube Short.
 
-Rules:
+CORE REQUIREMENT:
+The final Short must feel like a polished devotional social-media video,
+not a static AI image with random narration.
 
-1. Check the date for an important Hindu festival, vrat, jayanti,
-   observance or spiritually relevant day.
-
+DATE / FESTIVAL:
+1. Check the target date for an important Hindu festival, vrat,
+   jayanti, observance or spiritually relevant day.
 2. If an important observance exists, it gets priority.
+3. Never invent a festival.
+4. Otherwise choose ONE useful devotional topic.
 
-3. Otherwise choose ONE useful devotional topic:
-   mantra, sloka, stotram, ashtakam, chanting, deity fact,
-   devotional practice or spiritual insight.
+TOPIC:
+Choose exactly ONE clear subject.
 
-4. Do not invent a festival.
+Possible topics:
+- mantra
+- sloka
+- stotram
+- deity significance
+- devotional practice
+- festival meaning
+- traditional devotional knowledge
+- chanting guidance
 
-5. Do not repeat a recent topic if recent topics are supplied.
+Do not combine unrelated subjects.
 
-6. The deity/topic must be completely unambiguous because an exact
-   matching visual will be generated later.
+VOICE:
+- Natural conversational Telugu.
+- Suitable for a devotional Short.
+- Warm, calm and human-sounding wording.
+- Avoid robotic list-like sentences.
+- Avoid excessive Sanskrit unless necessary.
+- Do not make unsupported claims.
+- 15–25 seconds.
+- Use natural punctuation for breathing.
+- Do not use emojis.
+- Do not use stage directions.
 
-7. Prefer a short 15–25 second format.
-
-8. Telugu must sound natural and understandable.
-
-9. If using a mantra/sloka, use an authentic and commonly established text.
-
-10. Do not make unsupported religious, historical or scientific claims.
+ON-SCREEN TEXT:
+Create 3–5 very short Telugu/English text cards.
+They must summarize the actual topic.
+They must NOT duplicate the entire voice script.
+Each card should be readable on a mobile screen.
 
 TITLE:
 - Maximum 60 characters including spaces.
-- MUST contain both Telugu and English.
-- Natural curiosity/question style.
-- Must accurately match the topic.
-- Keep it safely below 60 characters, preferably 50–55 characters.
+- Telugu + English.
+- Curiosity/question style.
+- Accurate to the topic.
+- Prefer 50–55 characters.
 
 DESCRIPTION:
 - Topic-specific.
-- Telugu + English naturally.
-- Useful devotional context.
-- Natural SEO keywords.
+- Telugu + English.
+- Natural SEO.
 - No generic filler.
 
 HASHTAGS:
-- Only relevant to the actual topic.
+Only relevant hashtags.
 
-VOICE_SCRIPT:
-- Natural Telugu.
-- Suitable for devotional narration or chanting.
-- No emojis.
-- No stage directions.
-- Keep it short enough for a YouTube Short.
-
-IMAGE_PROMPT:
-- Exact deity/festival/topic.
-- Devotional Indian visual.
-- Vertical 9:16 composition.
+IMAGE:
+- Exact deity/topic.
+- Traditional Indian devotional appearance.
+- Respectful.
+- Vertical 9:16.
 - No text.
 - No watermark.
-- No logos.
-- Do not include another deity unless specifically required.
+- No logo.
+- No unrelated deity.
+- No unrelated objects.
 
 Return ONLY valid JSON:
 
@@ -131,7 +145,12 @@ Return ONLY valid JSON:
   "description": "",
   "hashtags": [],
   "voice_script": "",
-  "image_prompt": ""
+  "image_prompt": "",
+  "text_cards": [
+    "",
+    "",
+    ""
+  ]
 }}
 """
 
@@ -139,11 +158,14 @@ Return ONLY valid JSON:
 
     for model in MODELS:
 
-        print(f"Trying Gemini model: {model}")
+        print(
+            f"Trying Gemini model: {model}"
+        )
 
         url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model}:generateContent?key={GEMINI_API_KEY}"
+            "https://generativelanguage.googleapis.com/"
+            f"v1beta/models/{model}:generateContent"
+            f"?key={GEMINI_API_KEY}"
         )
 
         for attempt in range(3):
@@ -156,7 +178,9 @@ Return ONLY valid JSON:
                         "contents": [
                             {
                                 "parts": [
-                                    {"text": prompt}
+                                    {
+                                        "text": prompt
+                                    }
                                 ]
                             }
                         ]
@@ -166,43 +190,34 @@ Return ONLY valid JSON:
 
                 if response.status_code == 503:
 
+                    last_error = (
+                        f"{model}: HTTP 503"
+                    )
+
                     print(
-                        f"Model {model} returned HTTP 503 "
+                        f"{model} returned HTTP 503 "
                         f"(attempt {attempt + 1}/3)"
                     )
 
-                    last_error = (
-                        f"{model}: HTTP 503 "
-                        f"{response.text[:500]}"
-                    )
-
                     if attempt < 2:
-                        wait_seconds = 2 ** attempt
-                        print(
-                            f"Retrying {model} in "
-                            f"{wait_seconds} seconds..."
-                        )
-                        time.sleep(wait_seconds)
-                        continue
 
-                    print(
-                        f"Model {model} unavailable after "
-                        "3 attempts."
-                    )
+                        time.sleep(
+                            2 ** attempt
+                        )
+
+                        continue
 
                     break
 
                 if response.status_code != 200:
 
-                    print(
-                        f"Model {model} failed: "
-                        f"HTTP {response.status_code}"
-                    )
-
                     last_error = (
-                        f"{model}: HTTP {response.status_code} "
+                        f"{model}: HTTP "
+                        f"{response.status_code} "
                         f"{response.text[:500]}"
                     )
+
+                    print(last_error)
 
                     break
 
@@ -216,10 +231,8 @@ Return ONLY valid JSON:
                 if not candidates:
 
                     last_error = (
-                        f"{model}: no candidates returned"
+                        f"{model}: no candidates"
                     )
-
-                    print(last_error)
 
                     break
 
@@ -232,11 +245,8 @@ Return ONLY valid JSON:
                 if not parts:
 
                     last_error = (
-                        f"{model}: "
-                        "no response parts returned"
+                        f"{model}: no response parts"
                     )
-
-                    print(last_error)
 
                     break
 
@@ -251,11 +261,8 @@ Return ONLY valid JSON:
                         f"{model}: empty response"
                     )
 
-                    print(last_error)
-
                     break
 
-                # Remove accidental markdown JSON fences.
                 if text.startswith("```"):
 
                     text = text.replace(
@@ -277,7 +284,8 @@ Return ONLY valid JSON:
                 validate_content(content)
 
                 print(
-                    f"Gemini model succeeded: {model}"
+                    f"Gemini model succeeded: "
+                    f"{model}"
                 )
 
                 return content
@@ -285,10 +293,9 @@ Return ONLY valid JSON:
             except json.JSONDecodeError as error:
 
                 last_error = (
-                    f"{model}: invalid JSON: {error}"
+                    f"{model}: invalid JSON: "
+                    f"{error}"
                 )
-
-                print(last_error)
 
                 break
 
@@ -299,7 +306,7 @@ Return ONLY valid JSON:
                 )
 
                 print(
-                    f"Model {model} failed: {error}"
+                    f"{model} failed: {error}"
                 )
 
                 break
@@ -319,63 +326,118 @@ def validate_content(content):
         "description",
         "hashtags",
         "voice_script",
-        "image_prompt"
+        "image_prompt",
+        "text_cards",
     ]
 
     for key in required:
 
-        if key not in content or not content[key]:
+        if key not in content:
 
             raise RuntimeError(
-                f"CONTENT_VALIDATION_FAILED: "
+                "CONTENT_VALIDATION_FAILED: "
                 f"missing {key}"
             )
 
-    title = normalize_title(
+    for key in required:
+
+        if not content[key]:
+
+            raise RuntimeError(
+                "CONTENT_VALIDATION_FAILED: "
+                f"empty {key}"
+            )
+
+    content["title"] = normalize_title(
         content["title"]
     )
 
-    content["title"] = title
+    title = content["title"]
 
     if len(title) > 60:
 
         raise RuntimeError(
             "CONTENT_VALIDATION_FAILED: "
-            f"title exceeds 60 characters ({len(title)})"
+            "title exceeds 60 characters"
         )
 
-    if not any(
+    has_telugu = any(
         "\u0C00" <= ch <= "\u0C7F"
         for ch in title
-    ):
+    )
+
+    if not has_telugu:
 
         raise RuntimeError(
             "CONTENT_VALIDATION_FAILED: "
             "title has no Telugu"
         )
 
-    english_present = any(
+    has_english = any(
         ("A" <= ch <= "Z")
         or
         ("a" <= ch <= "z")
         for ch in title
     )
 
-    if not english_present:
+    if not has_english:
 
         raise RuntimeError(
             "CONTENT_VALIDATION_FAILED: "
             "title has no English"
         )
 
-    if len(
-        content["voice_script"].strip()
-    ) < 5:
+    voice = content[
+        "voice_script"
+    ].strip()
+
+    if len(voice) < 20:
 
         raise RuntimeError(
             "CONTENT_VALIDATION_FAILED: "
             "voice script too short"
         )
+
+    cards = content[
+        "text_cards"
+    ]
+
+    if not isinstance(cards, list):
+
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: "
+            "text_cards must be a list"
+        )
+
+    if not 3 <= len(cards) <= 5:
+
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: "
+            "text_cards must contain 3–5 cards"
+        )
+
+    for card in cards:
+
+        if not isinstance(card, str):
+
+            raise RuntimeError(
+                "CONTENT_VALIDATION_FAILED: "
+                "text card must be text"
+            )
+
+        if not card.strip():
+
+            raise RuntimeError(
+                "CONTENT_VALIDATION_FAILED: "
+                "empty text card"
+            )
+
+        if len(card.strip()) > 80:
+
+            raise RuntimeError(
+                "CONTENT_VALIDATION_FAILED: "
+                "text card is too long"
+            )
 
     if not content[
         "image_prompt"
