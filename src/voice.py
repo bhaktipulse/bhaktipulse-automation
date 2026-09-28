@@ -1,4 +1,3 @@
-```python
 import os
 from pathlib import Path
 
@@ -59,11 +58,9 @@ def prepare_clean_checkpoint(original_checkpoint):
     )
 
     if clean_checkpoint.exists():
-
         print(
             "Clean IndicF5 checkpoint already exists."
         )
-
         return str(clean_checkpoint)
 
     print(
@@ -80,14 +77,6 @@ def prepare_clean_checkpoint(original_checkpoint):
 
     for key, value in state_dict.items():
 
-        # Original IndicF5 keys:
-        #
-        # ema_model._orig_mod.transformer....
-        #
-        # Required by F5-TTS loader:
-        #
-        # ema_model.transformer....
-
         if key.startswith("ema_model._orig_mod."):
 
             new_key = key.replace(
@@ -103,7 +92,6 @@ def prepare_clean_checkpoint(original_checkpoint):
             cleaned[key] = value
 
     if not cleaned:
-
         raise RuntimeError(
             "INDICF5_CHECKPOINT_FAILED: "
             "No ema_model weights found."
@@ -119,7 +107,6 @@ def prepare_clean_checkpoint(original_checkpoint):
     )
 
     if not clean_checkpoint.exists():
-
         raise RuntimeError(
             "INDICF5_CHECKPOINT_FAILED: "
             "Clean checkpoint was not created."
@@ -139,7 +126,6 @@ def load_indicf5():
     global _vocoder
 
     if _model is not None:
-
         return _model, _vocoder
 
     device = get_device()
@@ -210,7 +196,6 @@ def load_indicf5():
     )
 
     if _model is None:
-
         raise RuntimeError(
             "INDICF5_MODEL_FAILED: "
             "Model was not loaded."
@@ -228,14 +213,12 @@ def load_indicf5():
 def generate_voice(voice_script: str):
 
     if not voice_script.strip():
-
         raise RuntimeError(
             "VOICE_GENERATION_FAILED: "
             "voice script is empty"
         )
 
     if not REF_AUDIO.exists():
-
         raise RuntimeError(
             "VOICE_GENERATION_FAILED: "
             f"reference audio not found: {REF_AUDIO}"
@@ -248,12 +231,6 @@ def generate_voice(voice_script: str):
     print(
         "Preparing Telugu reference audio..."
     )
-
-    # IMPORTANT:
-    # The installed F5-TTS version does NOT accept
-    # device= in preprocess_ref_audio_text().
-    #
-    # Device is passed later to infer_process().
 
     ref_audio, ref_text = (
         preprocess_ref_audio_text(
@@ -283,7 +260,6 @@ def generate_voice(voice_script: str):
         )
 
     if audio is None:
-
         raise RuntimeError(
             "VOICE_GENERATION_FAILED: "
             "IndicF5 returned no audio"
@@ -295,7 +271,6 @@ def generate_voice(voice_script: str):
     )
 
     if audio.size == 0:
-
         raise RuntimeError(
             "VOICE_VALIDATION_FAILED: "
             "generated audio is empty"
@@ -314,14 +289,12 @@ def generate_voice(voice_script: str):
     )
 
     if not VOICE_PATH.exists():
-
         raise RuntimeError(
             "VOICE_VALIDATION_FAILED: "
             "voice.wav was not created"
         )
 
     if VOICE_PATH.stat().st_size < 10_000:
-
         raise RuntimeError(
             "VOICE_VALIDATION_FAILED: "
             "audio file is too small"
@@ -333,4 +306,3 @@ def generate_voice(voice_script: str):
     )
 
     return str(VOICE_PATH)
-```
