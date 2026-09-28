@@ -6,23 +6,24 @@ import soundfile as sf
 import torch
 
 from huggingface_hub import hf_hub_download
-from safetensors.torch import load_file
+from safetensors.torch import load_file, save_file
 
 from f5_tts.model import DiT
 from f5_tts.infer.utils_infer import (
     load_model,
+    load_vocoder,
     infer_process,
     preprocess_ref_audio_text,
 )
 
-from vocos import Vocos
-
 
 MODEL_REPO = "ai4bharat/IndicF5"
-VOCOS_REPO = "charactr/vocos-mel-24khz"
 
 OUTPUT_DIR = Path("output")
 OUTPUT_DIR.mkdir(exist_ok=True)
+
+CACHE_DIR = OUTPUT_DIR / "indicf5_cache"
+CACHE_DIR.mkdir(exist_ok=True)
 
 VOICE_PATH = OUTPUT_DIR / "voice.wav"
 
@@ -50,63 +51,79 @@ def get_device():
     return "cpu"
 
 
-def load_vocos_fixed(device):
+def prepare_clean_checkpoint(original_checkpoint):
 
-    print("Loading Vocos vocoder with meta-tensor fix...")
+    clean_checkpoint = CACHE_DIR / "indicf5_ema_clean.safetensors"
 
-    config_path = hf_hub_download(
-        repo_id=VOCOS_REPO,
-        filename="config.yaml",
-        token=HF_TOKEN
-    )
-
-    model_path = hf_hub_download(
-        repo_id=VOCOS_REPO,
-        filename="pytorch_model.bin",
-        token=HF_TOKEN
-    )
-
-    vocoder = Vocos.from_hparams(
-        config_path
-    )
-
-    # IndicF5 / Vocos can initialize parameters
-    # on the meta device. Materialize them before
-    # loading the actual weights.
-    if any(
-        parameter.is_meta
-        for parameter in vocoder.parameters()
-    ):
+    if clean_checkpoint.exists():
         print(
-            "Vocos contains meta tensors. "
-            "Materializing on CPU..."
+            "Clean IndicF5 checkpoint already exists."
         )
-
-        vocoder = vocoder.to_empty(
-            device="cpu"
-        )
-
-    state_dict = torch.load(
-        model_path,
-        map_location="cpu",
-        weights_only=True
-    )
-
-    vocoder.load_state_dict(
-        state_dict
-    )
-
-    vocoder = vocoder.to(
-        device
-    )
-
-    vocoder.eval()
+        return str(clean_checkpoint)
 
     print(
-        "Vocos loaded successfully"
+        "Preparing IndicF5 checkpoint "
+        "without torch.compile prefixes..."
     )
 
-    return vocoder
+    state_dict = load_file(
+        original_checkpoint,
+        device="cpu"
+    )
+
+    cleaned = {}
+
+    for key, value in state_dict.items():
+
+        # Main IndicF5 EMA checkpoint keys.
+        #
+        # Original:
+        # ema_model._orig_mod.transformer....
+        #
+        # Required:
+        # ema_model.transformer....
+        #
+        if key.startswith("ema_model._orig_mod."):
+
+            new_key = key.replace(
+                "ema_model._orig_mod.",
+                "ema_model.",
+                1
+            )
+
+            cleaned[new_key] = value
+
+        elif key.startswith("ema_model."):
+
+            cleaned[key] = value
+
+    if not cleaned:
+        raise RuntimeError(
+            "INDICF5_CHECKPOINT_FAILED: "
+            "No ema_model weights found."
+        )
+
+    print(
+        f"EMA weights selected: {len(cleaned)}"
+    )
+
+    save_file(
+        cleaned,
+        str(clean_checkpoint)
+    )
+
+    if not clean_checkpoint.exists():
+        raise RuntimeError(
+            "INDICF5_CHECKPOINT_FAILED: "
+            "Clean checkpoint was not created."
+        )
+
+    print(
+        f"Clean checkpoint created: "
+        f"{clean_checkpoint}"
+    )
+
+    return str(clean_checkpoint)
 
 
 def load_indicf5():
@@ -133,23 +150,30 @@ def load_indicf5():
         token=HF_TOKEN
     )
 
-    ckpt_path = hf_hub_download(
+    original_checkpoint = hf_hub_download(
         repo_id=MODEL_REPO,
         filename="model.safetensors",
         token=HF_TOKEN
     )
 
-    # -------------------------------------------------
-    # Vocos
-    # -------------------------------------------------
-
-    _vocoder = load_vocos_fixed(
-        device
+    print(
+        "Loading Vocos vocoder with "
+        "meta-tensor fix..."
     )
 
-    # -------------------------------------------------
-    # IndicF5 model
-    # -------------------------------------------------
+    _vocoder = load_vocoder(
+        vocoder_name="vocos",
+        is_local=False,
+        device=device
+    )
+
+    print(
+        "Vocos loaded successfully"
+    )
+
+    clean_checkpoint = prepare_clean_checkpoint(
+        original_checkpoint
+    )
 
     print(
         "Loading IndicF5 model architecture..."
@@ -161,23 +185,27 @@ def load_indicf5():
         "heads": 16,
         "ff_mult": 2,
         "text_dim": 512,
-        "conv_layers": 4
+        "conv_layers": 4,
     }
 
     print(
-        "Loading IndicF5 checkpoint..."
+        "Loading cleaned IndicF5 checkpoint..."
     )
 
-    # Current F5-TTS load_model() requires
-    # ckpt_path as the third positional argument.
     _model = load_model(
         DiT,
         model_config,
-        ckpt_path,
+        clean_checkpoint,
         mel_spec_type="vocos",
         vocab_file=vocab_path,
         device=device
     )
+
+    if _model is None:
+        raise RuntimeError(
+            "INDICF5_MODEL_FAILED: "
+            "Model was not loaded."
+        )
 
     _model.eval()
 
@@ -191,12 +219,14 @@ def load_indicf5():
 def generate_voice(voice_script: str):
 
     if not voice_script.strip():
+
         raise RuntimeError(
             "VOICE_GENERATION_FAILED: "
             "voice script is empty"
         )
 
     if not REF_AUDIO.exists():
+
         raise RuntimeError(
             "VOICE_GENERATION_FAILED: "
             f"reference audio not found: {REF_AUDIO}"
@@ -213,7 +243,8 @@ def generate_voice(voice_script: str):
     ref_audio, ref_text = (
         preprocess_ref_audio_text(
             str(REF_AUDIO),
-            REF_TEXT
+            REF_TEXT,
+            device=device
         )
     )
 
@@ -234,9 +265,10 @@ def generate_voice(voice_script: str):
         )
 
     if audio is None:
+
         raise RuntimeError(
             "VOICE_GENERATION_FAILED: "
-            "no audio returned"
+            "IndicF5 returned no audio"
         )
 
     audio = np.asarray(
@@ -245,34 +277,40 @@ def generate_voice(voice_script: str):
     )
 
     if audio.size == 0:
+
         raise RuntimeError(
             "VOICE_VALIDATION_FAILED: "
             "generated audio is empty"
         )
 
-    if sample_rate is None:
-        sample_rate = 24000
+    output_sample_rate = (
+        int(sample_rate)
+        if sample_rate
+        else 24000
+    )
 
     sf.write(
         VOICE_PATH,
         audio,
-        samplerate=sample_rate
+        samplerate=output_sample_rate
     )
 
     if not VOICE_PATH.exists():
+
         raise RuntimeError(
             "VOICE_VALIDATION_FAILED: "
             "voice.wav was not created"
         )
 
     if VOICE_PATH.stat().st_size < 10_000:
+
         raise RuntimeError(
             "VOICE_VALIDATION_FAILED: "
-            "audio file too small"
+            "audio file is too small"
         )
 
     print(
-        "Telugu voice generated successfully: "
+        f"Telugu voice generated successfully: "
         f"{VOICE_PATH}"
     )
 
