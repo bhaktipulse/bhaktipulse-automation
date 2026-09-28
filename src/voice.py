@@ -1,3 +1,4 @@
+```python
 import os
 from pathlib import Path
 
@@ -53,12 +54,16 @@ def get_device():
 
 def prepare_clean_checkpoint(original_checkpoint):
 
-    clean_checkpoint = CACHE_DIR / "indicf5_ema_clean.safetensors"
+    clean_checkpoint = (
+        CACHE_DIR / "indicf5_ema_clean.safetensors"
+    )
 
     if clean_checkpoint.exists():
+
         print(
             "Clean IndicF5 checkpoint already exists."
         )
+
         return str(clean_checkpoint)
 
     print(
@@ -75,14 +80,14 @@ def prepare_clean_checkpoint(original_checkpoint):
 
     for key, value in state_dict.items():
 
-        # Main IndicF5 EMA checkpoint keys.
+        # Original IndicF5 keys:
         #
-        # Original:
         # ema_model._orig_mod.transformer....
         #
-        # Required:
-        # ema_model.transformer....
+        # Required by F5-TTS loader:
         #
+        # ema_model.transformer....
+
         if key.startswith("ema_model._orig_mod."):
 
             new_key = key.replace(
@@ -98,6 +103,7 @@ def prepare_clean_checkpoint(original_checkpoint):
             cleaned[key] = value
 
     if not cleaned:
+
         raise RuntimeError(
             "INDICF5_CHECKPOINT_FAILED: "
             "No ema_model weights found."
@@ -113,6 +119,7 @@ def prepare_clean_checkpoint(original_checkpoint):
     )
 
     if not clean_checkpoint.exists():
+
         raise RuntimeError(
             "INDICF5_CHECKPOINT_FAILED: "
             "Clean checkpoint was not created."
@@ -132,6 +139,7 @@ def load_indicf5():
     global _vocoder
 
     if _model is not None:
+
         return _model, _vocoder
 
     device = get_device()
@@ -202,6 +210,7 @@ def load_indicf5():
     )
 
     if _model is None:
+
         raise RuntimeError(
             "INDICF5_MODEL_FAILED: "
             "Model was not loaded."
@@ -240,12 +249,21 @@ def generate_voice(voice_script: str):
         "Preparing Telugu reference audio..."
     )
 
+    # IMPORTANT:
+    # The installed F5-TTS version does NOT accept
+    # device= in preprocess_ref_audio_text().
+    #
+    # Device is passed later to infer_process().
+
     ref_audio, ref_text = (
         preprocess_ref_audio_text(
             str(REF_AUDIO),
-            REF_TEXT,
-            device=device
+            REF_TEXT
         )
+    )
+
+    print(
+        "Telugu reference audio prepared."
     )
 
     print(
@@ -315,3 +333,4 @@ def generate_voice(voice_script: str):
     )
 
     return str(VOICE_PATH)
+```
