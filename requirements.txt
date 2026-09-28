@@ -3,10 +3,8 @@ google-api-python-client
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
-
 huggingface_hub
 requests
 Pillow
-
-edge-tts
+gTTS
 pydub
