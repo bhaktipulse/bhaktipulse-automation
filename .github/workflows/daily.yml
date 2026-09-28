@@ -2,6 +2,7 @@ name: BhaktiPulse Daily Automation
 
 on:
   workflow_dispatch:
+
   schedule:
     - cron: "30 17 * * *"
 
@@ -37,6 +38,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: Verify Piper
+        run: |
+          piper --version
+
+      - name: Verify Telugu Piper voice
+        run: |
+          echo "Telugu Piper voice: te_IN-maya-medium"
 
       - name: Run automation test
         env:
