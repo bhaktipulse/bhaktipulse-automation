@@ -1,3 +1,4 @@
+import os
 import sys
 from datetime import date
 
@@ -33,6 +34,18 @@ def main():
         f"TITLE: {content['title']}"
     )
 
+    print(
+        "TEXT CARDS:"
+    )
+
+    for index, card in enumerate(
+        content["text_cards"],
+        start=1
+    ):
+        print(
+            f"  {index}. {card}"
+        )
+
     # 2. Generate exact devotional image
     print("STEP 2: Generating image...")
 
@@ -56,7 +69,32 @@ def main():
         text_cards=content["text_cards"]
     )
 
-    # 5. Schedule YouTube publication
+    # 5. Test mode: create video but do NOT publish
+    test_only = (
+        os.environ.get(
+            "TEST_ONLY",
+            "false"
+        ).strip().lower()
+        == "true"
+    )
+
+    if test_only:
+
+        print("")
+        print("====================================")
+        print("BhaktiPulse TEST SUCCESS")
+        print("====================================")
+        print(
+            f"Video created: {video_path}"
+        )
+        print(
+            "YouTube upload/scheduling was SKIPPED."
+        )
+        print("====================================")
+
+        return
+
+    # 6. Schedule YouTube publication
     print("STEP 5: Scheduling YouTube...")
 
     publish_at = tomorrow_0630_ist()
