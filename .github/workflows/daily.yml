@@ -43,12 +43,24 @@ jobs:
         run: |
           piper --help
 
-      - name: Test Piper Telugu voice
+      - name: Download Telugu Piper voice
+        run: |
+          mkdir -p piper_voices
+
+          python -m piper.download_voices \
+            --download-dir piper_voices \
+            te_IN-maya-medium
+
+          test -s piper_voices/te_IN-maya-medium.onnx
+          test -s piper_voices/te_IN-maya-medium.onnx.json
+
+      - name: Test Telugu Piper voice
         run: |
           mkdir -p output
+
           echo "నమస్కారం. ఓం నమః శివాయ." | \
             piper \
-            --model te_IN-maya-medium \
+            --model piper_voices/te_IN-maya-medium.onnx \
             --output_file output/piper_test.wav
 
           test -s output/piper_test.wav
