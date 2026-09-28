@@ -1,190 +1,356 @@
+import shutil
+import subprocess
 from pathlib import Path
-from gtts import gTTS
-from pydub import AudioSegment
 
 OUTPUT_DIR = Path("output")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-VOICE_MP3 = OUTPUT_DIR / "voice.mp3"
 VOICE_WAV = OUTPUT_DIR / "voice.wav"
+VOICE_MP3 = OUTPUT_DIR / "voice.mp3"
 
-NARRATION_MP3 = OUTPUT_DIR / "narration.mp3"
 NARRATION_WAV = OUTPUT_DIR / "narration.wav"
-
-CHANT_MP3 = OUTPUT_DIR / "chant.mp3"
 CHANT_WAV = OUTPUT_DIR / "chant.wav"
+MUSIC_WAV = OUTPUT_DIR / "devotional_music.wav"
 
-FINAL_AUDIO_WAV = OUTPUT_DIR / "final_voice.wav"
+PIPER_MODEL = "te_IN-maya-medium"
+
+
+def run(cmd, error_name):
+    print("RUN:", " ".join(str(x) for x in cmd))
+
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    if result.returncode != 0:
+        print(result.stdout)
+        print(result.stderr)
+        raise RuntimeError(
+            f"{error_name}: command failed with exit code {result.returncode}"
+        )
+
+    return result
 
 
 def clean_text(text):
     return " ".join(str(text).strip().split())
 
 
-def create_tts(text, output_path):
+def validate_audio(path, minimum_size=10000):
+    path = Path(path)
+
+    if not path.exists():
+        raise RuntimeError(f"VOICE_VALIDATION_FAILED: missing {path}")
+
+    if path.stat().st_size < minimum_size:
+        raise RuntimeError(
+            f"VOICE_VALIDATION_FAILED: audio file too small: {path}"
+        )
+
+
+def create_piper_audio(text, output_path):
     text = clean_text(text)
 
     if not text:
         raise RuntimeError("VOICE_GENERATION_FAILED: empty text")
 
-    try:
-        tts = gTTS(
-            text=text,
-            lang="te",
-            slow=False
-        )
-        tts.save(str(output_path))
-    except Exception as error:
+    piper = shutil.which("piper")
+
+    if not piper:
         raise RuntimeError(
-            "VOICE_GENERATION_FAILED: " + str(error)
+            "VOICE_GENERATION_FAILED: piper executable not found"
         )
 
-    if not output_path.exists():
+    output_path = Path(output_path)
+
+    # Piper automatically downloads the requested voice model
+    # when the model name is supplied.
+    run(
+        [
+            piper,
+            "--model",
+            PIPER_MODEL,
+            "--output_file",
+            str(output_path),
+        ],
+        "PIPER_TTS_FAILED",
+    ) if False else None
+
+    # Feed Telugu text through stdin.
+    result = subprocess.run(
+        [
+            piper,
+            "--model",
+            PIPER_MODEL,
+            "--output_file",
+            str(output_path),
+        ],
+        input=text,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        print(result.stdout)
+        print(result.stderr)
         raise RuntimeError(
-            "VOICE_VALIDATION_FAILED: audio was not created"
+            "PIPER_TTS_FAILED: " + result.stderr[-2000:]
         )
 
-    if output_path.stat().st_size < 3000:
-        raise RuntimeError(
-            "VOICE_VALIDATION_FAILED: audio file is too small"
-        )
+    validate_audio(output_path)
+
+    return output_path
 
 
-def convert_to_wav(mp3_path, wav_path):
-    try:
-        audio = AudioSegment.from_mp3(mp3_path)
-        audio = audio.set_frame_rate(48000).set_channels(1)
-        audio.export(wav_path, format="wav")
-    except Exception as error:
-        raise RuntimeError(
-            "VOICE_CONVERSION_FAILED: " + str(error)
-        )
+def create_narration(text):
+    print("")
+    print("Generating Telugu neural narration with Piper...")
+    print(f"Voice model: {PIPER_MODEL}")
 
-    if not wav_path.exists():
-        raise RuntimeError(
-            "VOICE_VALIDATION_FAILED: WAV was not created"
-        )
+    create_piper_audio(text, NARRATION_WAV)
 
-    if wav_path.stat().st_size < 10000:
-        raise RuntimeError(
-            "VOICE_VALIDATION_FAILED: WAV file is too small"
-        )
+    validate_audio(NARRATION_WAV)
 
-    return audio
+    return NARRATION_WAV
 
 
 def create_chant_audio():
     """
     Creates a separate mantra track.
-    The mantra is intentionally short so it can be mixed
-    naturally into a devotional Short.
+
+    This is deliberately treated differently from narration:
+    - slower tempo
+    - lower pitch
+    - repeated mantra
+    - pauses
+    - echo/reverb
     """
 
-    chant_text = (
+    print("")
+    print("Generating devotional mantra track...")
+
+    source = OUTPUT_DIR / "chant_source.wav"
+
+    mantra = (
         "ఓం నమః శివాయ. "
         "ఓం నమః శివాయ. "
         "ఓం నమః శివాయ."
     )
 
-    print("Generating separate Shiva mantra chanting...")
+    create_piper_audio(mantra, source)
 
-    create_tts(
-        chant_text,
-        CHANT_MP3
+    # Slow down + slightly lower pitch + echo/reverb.
+    run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(source),
+            "-filter_complex",
+            (
+                "[0:a]"
+                "asetrate=22050*0.94,"
+                "aresample=48000,"
+                "atempo=0.86,"
+                "aecho=0.8:0.75:90|180:0.28|0.14,"
+                "volume=0.72"
+                "[chant]"
+            ),
+            "-map",
+            "[chant]",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            str(CHANT_WAV),
+        ],
+        "CHANT_PROCESSING_FAILED",
     )
 
-    convert_to_wav(
-        CHANT_MP3,
-        CHANT_WAV
-    )
+    validate_audio(CHANT_WAV)
 
-    chant = AudioSegment.from_wav(CHANT_WAV)
-
-    # Small fade-in/out makes the chanting transition smoother.
-    chant = chant.fade_in(250).fade_out(500)
-
-    # Keep chanting slightly shorter if unexpectedly long.
-    if len(chant) > 9000:
-        chant = chant[:9000].fade_out(700)
-
-    chant.export(
-        CHANT_WAV,
-        format="wav"
-    )
-
-    print(
-        f"Mantra chanting created: {CHANT_WAV} "
-        f"({len(chant) / 1000:.2f}s)"
-    )
-
-    return chant
+    return CHANT_WAV
 
 
-def create_final_audio(narration, chant):
+def create_devotional_music(duration_seconds):
     """
-    Structure:
+    Copyright-safe procedural devotional ambience.
 
-    narration
-    ↓
-    short pause
-    ↓
-    mantra chanting
-    ↓
-    short pause
-
-    The chant is intentionally lower than narration.
+    It is intentionally subtle so it supports the voice instead
+    of competing with the narration.
     """
 
-    pause_before = AudioSegment.silent(
-        duration=500
+    print("")
+    print("Generating devotional background ambience...")
+
+    duration_seconds = max(15, min(int(duration_seconds) + 5, 120))
+
+    # Layered sustained tones create a soft drone/pad.
+    filter_complex = (
+        "[0:a]volume=0.055[a];"
+        "[1:a]volume=0.035[b];"
+        "[2:a]volume=0.025[c];"
+        "[a][b][c]"
+        "amix=inputs=3:duration=longest:normalize=0,"
+        "lowpass=f=1200,"
+        "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+        f"afade=t=in:st=0:d=2,"
+        f"afade=t=out:st={max(2, duration_seconds - 3)}:d=3"
+        "[music]"
     )
 
-    pause_after = AudioSegment.silent(
-        duration=350
+    run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-t",
+            str(duration_seconds),
+            "-i",
+            "sine=frequency=110:sample_rate=48000",
+            "-f",
+            "lavfi",
+            "-t",
+            str(duration_seconds),
+            "-i",
+            "sine=frequency=220:sample_rate=48000",
+            "-f",
+            "lavfi",
+            "-t",
+            str(duration_seconds),
+            "-i",
+            "sine=frequency=330:sample_rate=48000",
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[music]",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            str(MUSIC_WAV),
+        ],
+        "MUSIC_GENERATION_FAILED",
     )
 
-    # Slightly reduce chant loudness so it does not sound harsh.
-    chant = chant - 2
+    validate_audio(MUSIC_WAV)
 
-    final_audio = (
-        narration
-        + pause_before
-        + chant
-        + pause_after
+    return MUSIC_WAV
+
+
+def create_final_audio(narration_path, chant_path):
+    print("")
+    print("Mixing narration + chant + devotional ambience...")
+
+    narration_path = Path(narration_path)
+    chant_path = Path(chant_path)
+
+    narration_probe = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(narration_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
 
-    final_audio = (
-        final_audio
-        .set_frame_rate(48000)
-        .set_channels(1)
+    try:
+        narration_duration = float(narration_probe.stdout.strip())
+    except Exception:
+        narration_duration = 20.0
+
+    music_path = create_devotional_music(narration_duration + 12)
+
+    # Chant starts after narration.
+    # Music runs underneath the whole track.
+    #
+    # Voice is kept dominant.
+    run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(narration_path),
+            "-i",
+            str(chant_path),
+            "-i",
+            str(music_path),
+            "-filter_complex",
+            (
+                "[0:a]"
+                "aformat=sample_rates=48000:channel_layouts=stereo,"
+                "volume=1.0"
+                "[n];"
+
+                "[1:a]"
+                "aformat=sample_rates=48000:channel_layouts=stereo,"
+                "volume=0.70"
+                "[c];"
+
+                "[2:a]"
+                "aformat=sample_rates=48000:channel_layouts=stereo,"
+                "volume=0.55"
+                "[m];"
+
+                "[n][c][m]"
+                "amix=inputs=3:duration=longest:dropout_transition=2,"
+                "loudnorm=I=-16:TP=-1.5:LRA=7"
+                "[out]"
+            ),
+            "-map",
+            "[out]",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            str(VOICE_WAV),
+        ],
+        "AUDIO_MIX_FAILED",
     )
 
-    final_audio.export(
-        FINAL_AUDIO_WAV,
-        format="wav"
+    validate_audio(VOICE_WAV, 20000)
+
+    run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(VOICE_WAV),
+            "-codec:a",
+            "libmp3lame",
+            "-b:a",
+            "192k",
+            str(VOICE_MP3),
+        ],
+        "VOICE_MP3_CREATION_FAILED",
     )
 
-    if not FINAL_AUDIO_WAV.exists():
-        raise RuntimeError(
-            "VOICE_VALIDATION_FAILED: final audio missing"
-        )
+    validate_audio(VOICE_MP3, 5000)
 
-    if FINAL_AUDIO_WAV.stat().st_size < 20000:
-        raise RuntimeError(
-            "VOICE_VALIDATION_FAILED: final audio too small"
-        )
+    print("")
+    print("====================================")
+    print("DEVOTIONAL AUDIO READY")
+    print("====================================")
+    print(f"Narration : {narration_path}")
+    print(f"Chant     : {chant_path}")
+    print(f"Music     : {music_path}")
+    print(f"Final WAV : {VOICE_WAV}")
+    print(f"Final MP3 : {VOICE_MP3}")
+    print("====================================")
 
-    duration = len(final_audio) / 1000.0
-
-    print(
-        f"Final devotional audio created: "
-        f"{FINAL_AUDIO_WAV}"
-    )
-    print(
-        f"Final audio duration: {duration:.2f} seconds"
-    )
-
-    return str(FINAL_AUDIO_WAV)
+    return VOICE_WAV
 
 
 def generate_voice(text: str):
@@ -195,78 +361,7 @@ def generate_voice(text: str):
             "VOICE_GENERATION_FAILED: voice script is empty"
         )
 
-    print("Generating Telugu narration with Google TTS...")
-
-    # -------------------------------------------------
-    # 1. Narration
-    # -------------------------------------------------
-
-    create_tts(
-        text,
-        NARRATION_MP3
-    )
-
-    narration = convert_to_wav(
-        NARRATION_MP3,
-        NARRATION_WAV
-    )
-
-    print(
-        f"Narration duration: "
-        f"{len(narration) / 1000:.2f}s"
-    )
-
-    # -------------------------------------------------
-    # 2. Separate mantra chanting
-    # -------------------------------------------------
-
+    narration = create_narration(text)
     chant = create_chant_audio()
 
-    # -------------------------------------------------
-    # 3. Combine narration + chanting
-    # -------------------------------------------------
-
-    final_audio = create_final_audio(
-        narration,
-        chant
-    )
-
-    # -------------------------------------------------
-    # 4. Keep compatibility with existing pipeline
-    # -------------------------------------------------
-
-    # Existing video.py expects output/voice.wav.
-    final_path = Path(final_audio)
-
-    final_path.replace(VOICE_WAV)
-
-    if not VOICE_WAV.exists():
-        raise RuntimeError(
-            "VOICE_VALIDATION_FAILED: voice.wav missing"
-        )
-
-    # Re-create a compatibility MP3 from final WAV.
-    try:
-        final_audio_segment = AudioSegment.from_wav(
-            VOICE_WAV
-        )
-        final_audio_segment.export(
-            VOICE_MP3,
-            format="mp3",
-            bitrate="192k"
-        )
-    except Exception as error:
-        raise RuntimeError(
-            "VOICE_MP3_CREATION_FAILED: " + str(error)
-        )
-
-    print("")
-    print("====================================")
-    print("Telugu narration + mantra audio ready")
-    print("====================================")
-    print(f"Narration: {NARRATION_WAV}")
-    print(f"Chanting:  {CHANT_WAV}")
-    print(f"Final:     {VOICE_WAV}")
-    print("====================================")
-
-    return str(VOICE_WAV)
+    return str(create_final_audio(narration, chant))
