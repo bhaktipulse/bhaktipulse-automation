@@ -6,5 +6,4 @@ google-auth-httplib2
 huggingface_hub
 requests
 Pillow
-gTTS
-pydub
+piper-tts
