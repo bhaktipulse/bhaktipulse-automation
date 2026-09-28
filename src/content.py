@@ -1,10 +1,18 @@
-import os
 import json
+import os
+import re
 import time
+from datetime import datetime, timezone
+
 import requests
 
 
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+if not GEMINI_API_KEY:
+    raise RuntimeError(
+        "GEMINI_API_KEY is not configured"
+    )
 
 
 MODELS = [
@@ -15,312 +23,96 @@ MODELS = [
 ]
 
 
-def normalize_title(title):
+API_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    "{model}:generateContent"
+)
 
-    title = " ".join(
-        title.strip().split()
+
+def clean_text(value):
+    return " ".join(
+        str(value).strip().split()
     )
 
-    if len(title) <= 60:
-        return title
 
-    title = title.rstrip(" .?!")
+def validate_telugu_voice_script(text):
+    text = clean_text(text)
 
-    if len(title) <= 60:
-        return title
-
-    words = title.split()
-
-    result = ""
-
-    for word in words:
-
-        candidate = (
-            word
-            if not result
-            else result + " " + word
-        )
-
-        if len(candidate) <= 60:
-            result = candidate
-        else:
-            break
-
-    if not result:
+    if not text:
         raise RuntimeError(
-            "CONTENT_VALIDATION_FAILED: "
-            "title cannot be reduced to 60 characters"
+            "CONTENT_VALIDATION_FAILED: voice_script is empty"
         )
 
-    return result
-
-
-def generate_content(target_date: str):
-
-    prompt = f"""
-You are the BhaktiPulse daily devotional Short planner.
-
-Target date: {target_date}
-
-Create ONE original Hindu devotional YouTube Short.
-
-CORE REQUIREMENT:
-The final Short must feel like a polished devotional social-media video,
-not a static AI image with random narration.
-
-DATE / FESTIVAL:
-1. Check the target date for an important Hindu festival, vrat,
-   jayanti, observance or spiritually relevant day.
-2. If an important observance exists, it gets priority.
-3. Never invent a festival.
-4. Otherwise choose ONE useful devotional topic.
-
-TOPIC:
-Choose exactly ONE clear subject.
-
-Possible topics:
-- mantra
-- sloka
-- stotram
-- deity significance
-- devotional practice
-- festival meaning
-- traditional devotional knowledge
-- chanting guidance
-
-Do not combine unrelated subjects.
-
-VOICE:
-- Natural conversational Telugu.
-- Suitable for a devotional Short.
-- Warm, calm and human-sounding wording.
-- Avoid robotic list-like sentences.
-- Avoid excessive Sanskrit unless necessary.
-- Do not make unsupported claims.
-- 15–25 seconds.
-- Use natural punctuation for breathing.
-- Do not use emojis.
-- Do not use stage directions.
-
-ON-SCREEN TEXT:
-Create 3–5 very short Telugu/English text cards.
-They must summarize the actual topic.
-They must NOT duplicate the entire voice script.
-Each card should be readable on a mobile screen.
-
-TITLE:
-- Maximum 60 characters including spaces.
-- Telugu + English.
-- Curiosity/question style.
-- Accurate to the topic.
-- Prefer 50–55 characters.
-
-DESCRIPTION:
-- Topic-specific.
-- Telugu + English.
-- Natural SEO.
-- No generic filler.
-
-HASHTAGS:
-Only relevant hashtags.
-
-IMAGE:
-- Exact deity/topic.
-- Traditional Indian devotional appearance.
-- Respectful.
-- Vertical 9:16.
-- No text.
-- No watermark.
-- No logo.
-- No unrelated deity.
-- No unrelated objects.
-
-Return ONLY valid JSON:
-
-{{
-  "topic": "",
-  "festival": "",
-  "deity": "",
-  "title": "",
-  "description": "",
-  "hashtags": [],
-  "voice_script": "",
-  "image_prompt": "",
-  "text_cards": [
-    "",
-    "",
-    ""
-  ]
-}}
-"""
-
-    last_error = None
-
-    for model in MODELS:
-
-        print(
-            f"Trying Gemini model: {model}"
+    # Must contain Telugu.
+    if not re.search(r"[\u0C00-\u0C7F]", text):
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: voice_script has no Telugu text"
         )
 
-        url = (
-            "https://generativelanguage.googleapis.com/"
-            f"v1beta/models/{model}:generateContent"
-            f"?key={GEMINI_API_KEY}"
+    # Prevent unnatural excessive punctuation.
+    if "..." in text:
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: voice_script contains artificial pauses"
         )
 
-        for attempt in range(3):
+    # Prevent repeated punctuation.
+    if re.search(r"[!?.,]{3,}", text):
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: voice_script contains excessive punctuation"
+        )
 
-            try:
+    # Do not allow spaces around punctuation.
+    if re.search(r"\s+[,.!?;:]", text):
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: voice_script has spaces before punctuation"
+        )
 
-                response = requests.post(
-                    url,
-                    json={
-                        "contents": [
-                            {
-                                "parts": [
-                                    {
-                                        "text": prompt
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    timeout=90
-                )
+    # Natural mantra phrase must stay intact.
+    mantra_variants = [
+        "ఓం నమః శివాయ",
+        "ఓం నమః శివాయ.",
+        "ఓం నమః శివాయ!",
+        "ఓం నమః శివాయ?",
+    ]
 
-                if response.status_code == 503:
+    if "ఓం" in text and "నమః" in text and "శివాయ" in text:
+        if not re.search(
+            r"ఓం\s+నమః\s+శివాయ",
+            text
+        ):
+            raise RuntimeError(
+                "CONTENT_VALIDATION_FAILED: Om Namah Shivaya phrase was split unnaturally"
+            )
 
-                    last_error = (
-                        f"{model}: HTTP 503"
-                    )
+    # No accidental hyphenation inside Telugu phrases.
+    if re.search(
+        r"[\u0C00-\u0C7F]\s*[-–—]\s*[\u0C00-\u0C7F]",
+        text
+    ):
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: Telugu phrase contains artificial hyphen"
+        )
 
-                    print(
-                        f"{model} returned HTTP 503 "
-                        f"(attempt {attempt + 1}/3)"
-                    )
+    # Voice script should be short enough for a Short.
+    words = text.split()
 
-                    if attempt < 2:
+    if len(words) < 8:
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: voice_script is too short"
+        )
 
-                        time.sleep(
-                            2 ** attempt
-                        )
+    if len(words) > 75:
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: voice_script is too long"
+        )
 
-                        continue
-
-                    break
-
-                if response.status_code != 200:
-
-                    last_error = (
-                        f"{model}: HTTP "
-                        f"{response.status_code} "
-                        f"{response.text[:500]}"
-                    )
-
-                    print(last_error)
-
-                    break
-
-                data = response.json()
-
-                candidates = data.get(
-                    "candidates",
-                    []
-                )
-
-                if not candidates:
-
-                    last_error = (
-                        f"{model}: no candidates"
-                    )
-
-                    break
-
-                parts = (
-                    candidates[0]
-                    .get("content", {})
-                    .get("parts", [])
-                )
-
-                if not parts:
-
-                    last_error = (
-                        f"{model}: no response parts"
-                    )
-
-                    break
-
-                text = parts[0].get(
-                    "text",
-                    ""
-                ).strip()
-
-                if not text:
-
-                    last_error = (
-                        f"{model}: empty response"
-                    )
-
-                    break
-
-                if text.startswith("```"):
-
-                    text = text.replace(
-                        "```json",
-                        "",
-                        1
-                    )
-
-                    text = text.replace(
-                        "```",
-                        "",
-                        1
-                    )
-
-                    text = text.strip()
-
-                content = json.loads(text)
-
-                validate_content(content)
-
-                print(
-                    f"Gemini model succeeded: "
-                    f"{model}"
-                )
-
-                return content
-
-            except json.JSONDecodeError as error:
-
-                last_error = (
-                    f"{model}: invalid JSON: "
-                    f"{error}"
-                )
-
-                break
-
-            except Exception as error:
-
-                last_error = (
-                    f"{model}: {error}"
-                )
-
-                print(
-                    f"{model} failed: {error}"
-                )
-
-                break
-
-    raise RuntimeError(
-        "ALL_GEMINI_MODELS_FAILED: "
-        + str(last_error)
-    )
+    return text
 
 
-def validate_content(content):
-
-    required = [
+def validate_content(data):
+    required_fields = [
         "topic",
+        "festival",
         "deity",
         "title",
         "description",
@@ -330,120 +122,478 @@ def validate_content(content):
         "text_cards",
     ]
 
-    for key in required:
-
-        if key not in content:
-
+    for field in required_fields:
+        if field not in data:
             raise RuntimeError(
-                "CONTENT_VALIDATION_FAILED: "
-                f"missing {key}"
+                f"CONTENT_VALIDATION_FAILED: missing field: {field}"
             )
 
-    for key in required:
+    topic = clean_text(data["topic"])
+    festival = clean_text(data["festival"])
+    deity = clean_text(data["deity"])
+    title = clean_text(data["title"])
+    description = clean_text(data["description"])
+    hashtags = clean_text(data["hashtags"])
+    image_prompt = clean_text(data["image_prompt"])
 
-        if not content[key]:
-
-            raise RuntimeError(
-                "CONTENT_VALIDATION_FAILED: "
-                f"empty {key}"
-            )
-
-    content["title"] = normalize_title(
-        content["title"]
+    voice_script = validate_telugu_voice_script(
+        data["voice_script"]
     )
 
-    title = content["title"]
+    text_cards = data["text_cards"]
+
+    if not topic:
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: topic is empty"
+        )
+
+    if not deity:
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: deity is empty"
+        )
+
+    if not title:
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: title is empty"
+        )
 
     if len(title) > 60:
-
         raise RuntimeError(
-            "CONTENT_VALIDATION_FAILED: "
-            "title exceeds 60 characters"
+            "CONTENT_VALIDATION_FAILED: title exceeds 60 characters"
         )
 
-    has_telugu = any(
-        "\u0C00" <= ch <= "\u0C7F"
-        for ch in title
+    # Require Telugu + English in title.
+    if not re.search(
+        r"[\u0C00-\u0C7F]",
+        title
+    ):
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: title must contain Telugu"
+        )
+
+    if not re.search(
+        r"[A-Za-z]",
+        title
+    ):
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: title must contain English"
+        )
+
+    if not description:
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: description is empty"
+        )
+
+    if not hashtags:
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: hashtags are empty"
+        )
+
+    if not image_prompt:
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: image_prompt is empty"
+        )
+
+    if not isinstance(
+        text_cards,
+        list
+    ):
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: text_cards must be a list"
+        )
+
+    if not 3 <= len(text_cards) <= 5:
+        raise RuntimeError(
+            "CONTENT_VALIDATION_FAILED: text_cards must contain 3-5 cards"
+        )
+
+    cleaned_cards = []
+
+    for card in text_cards:
+        card = clean_text(card)
+
+        if not card:
+            raise RuntimeError(
+                "CONTENT_VALIDATION_FAILED: empty text card"
+            )
+
+        if len(card) > 80:
+            raise RuntimeError(
+                "CONTENT_VALIDATION_FAILED: text card exceeds 80 characters"
+            )
+
+        cleaned_cards.append(card)
+
+    data["topic"] = topic
+    data["festival"] = festival
+    data["deity"] = deity
+    data["title"] = title
+    data["description"] = description
+    data["hashtags"] = hashtags
+    data["voice_script"] = voice_script
+    data["image_prompt"] = image_prompt
+    data["text_cards"] = cleaned_cards
+
+    return data
+
+
+def build_prompt(target_date):
+    return f"""
+You are the content director for BhaktiPulse devotional YouTube Shorts.
+
+TARGET DATE:
+{target_date}
+
+Create ONE accurate devotional Short for this exact date.
+
+IMPORTANT:
+First determine the most relevant devotional topic, deity, mantra,
+festival, observance, or spiritually meaningful subject for the target date.
+
+Do NOT randomly choose a deity when an important festival or observance
+exists for that date.
+
+Do NOT invent festival facts.
+
+If there is no major festival, choose ONE suitable devotional topic
+for the day.
+
+The final content must be respectful, natural, concise and suitable
+for an Indian devotional audience.
+
+==================================================
+VOICE SCRIPT — VERY IMPORTANT
+==================================================
+
+The voice_script will be converted directly into Telugu speech using
+a Telugu neural TTS voice.
+
+Write it as a HUMAN SPEAKING naturally.
+
+The most important requirement is NATURAL WORD FLOW.
+
+Do NOT write the script like a list.
+
+Do NOT separate words that naturally belong together.
+
+Do NOT put commas between every word.
+
+Do NOT put punctuation between words of a single phrase.
+
+Do NOT use artificial pauses.
+
+Do NOT use ellipses.
+
+Do NOT use hyphens to separate Telugu words.
+
+Use a normal space between words that belong to one phrase.
+
+Use commas ONLY where a real short speaking pause is natural.
+
+Use a full stop ONLY at a real sentence boundary.
+
+==================================================
+MANTRA RULE
+==================================================
+
+If the selected topic includes a mantra such as:
+
+ఓం నమః శివాయ
+
+treat the COMPLETE phrase as ONE continuous spoken mantra.
+
+Write:
+
+ఓం నమః శివాయ
+
+Do NOT write:
+
+ఓం, నమః, శివాయ
+
+Do NOT write:
+
+ఓం. నమః. శివాయ.
+
+Do NOT write:
+
+ఓం — నమః — శివాయ
+
+Do NOT put punctuation between the three words.
+
+The mantra must be spoken as one natural phrase.
+
+If the mantra appears in the voice_script, it should normally appear
+as one complete phrase, not as separated sentence fragments.
+
+==================================================
+TELUGU NATURALNESS
+==================================================
+
+Use simple natural Telugu.
+
+Avoid overly literary or difficult Telugu.
+
+Avoid unnatural machine-translation wording.
+
+Avoid English words unless genuinely useful.
+
+Do not create unnecessary pauses before or after short words.
+
+Do not break compound expressions unnecessarily.
+
+The listener should feel that a Telugu speaker is speaking naturally,
+not reading isolated words.
+
+Target voice length:
+approximately 15–25 seconds.
+
+==================================================
+TEXT CARDS
+==================================================
+
+Create 3–5 short on-screen text cards.
+
+Cards must support the voice script.
+
+Do not split a natural Telugu phrase into unnatural word fragments.
+
+Each card must be short and readable on a vertical mobile video.
+
+==================================================
+TITLE
+==================================================
+
+Create one title.
+
+Maximum 60 characters.
+
+Must contain Telugu + English.
+
+Use curiosity/question style where natural.
+
+Do not use fake claims.
+
+Do not use excessive emojis.
+
+==================================================
+DESCRIPTION
+==================================================
+
+Create a short natural Telugu + English description.
+
+Keep it topic-specific.
+
+Do not stuff keywords.
+
+==================================================
+HASHTAGS
+==================================================
+
+Create relevant devotional hashtags.
+
+Do not use unrelated trending hashtags.
+
+==================================================
+IMAGE
+==================================================
+
+Create an exact image_prompt for the selected topic/deity.
+
+The image must show the requested deity/topic accurately.
+
+No unrelated deity.
+
+No extra deity.
+
+No text.
+
+No watermark.
+
+No logo.
+
+No captions.
+
+Vertical 9:16 devotional composition.
+
+==================================================
+OUTPUT
+==================================================
+
+Return ONLY valid JSON.
+
+Use exactly these fields:
+
+{{
+  "topic": "",
+  "festival": "",
+  "deity": "",
+  "title": "",
+  "description": "",
+  "hashtags": "",
+  "voice_script": "",
+  "image_prompt": "",
+  "text_cards": [
+    "",
+    "",
+    ""
+  ]
+}}
+
+No markdown.
+No explanation outside JSON.
+"""
+
+
+def call_gemini(model, prompt):
+    url = API_URL.format(
+        model=model
     )
 
-    if not has_telugu:
+    params = {
+        "key": GEMINI_API_KEY
+    }
 
-        raise RuntimeError(
-            "CONTENT_VALIDATION_FAILED: "
-            "title has no Telugu"
-        )
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.35,
+            "topP": 0.85,
+            "responseMimeType": "application/json"
+        }
+    }
 
-    has_english = any(
-        ("A" <= ch <= "Z")
-        or
-        ("a" <= ch <= "z")
-        for ch in title
+    response = requests.post(
+        url,
+        params=params,
+        json=payload,
+        timeout=120
     )
 
-    if not has_english:
-
+    if response.status_code != 200:
         raise RuntimeError(
-            "CONTENT_VALIDATION_FAILED: "
-            "title has no English"
+            f"GEMINI_HTTP_{response.status_code}: "
+            + response.text[:2000]
         )
 
-    voice = content[
-        "voice_script"
-    ].strip()
+    data = response.json()
 
-    if len(voice) < 20:
-
+    try:
+        text = (
+            data["candidates"][0]["content"]["parts"][0]["text"]
+        )
+    except Exception:
         raise RuntimeError(
-            "CONTENT_VALIDATION_FAILED: "
-            "voice script too short"
+            "GEMINI_RESPONSE_FAILED: no usable response"
         )
 
-    cards = content[
-        "text_cards"
-    ]
+    return text
 
-    if not isinstance(cards, list):
 
-        raise RuntimeError(
-            "CONTENT_VALIDATION_FAILED: "
-            "text_cards must be a list"
-        )
+def parse_json_response(text):
+    text = text.strip()
 
-    if not 3 <= len(cards) <= 5:
+    # Remove accidental markdown fences if model returns them.
+    text = re.sub(
+        r"^```json\s*",
+        "",
+        text,
+        flags=re.IGNORECASE
+    )
 
-        raise RuntimeError(
-            "CONTENT_VALIDATION_FAILED: "
-            "text_cards must contain 3–5 cards"
-        )
+    text = re.sub(
+        r"\s*```$",
+        "",
+        text
+    )
 
-    for card in cards:
-
-        if not isinstance(card, str):
-
-            raise RuntimeError(
-                "CONTENT_VALIDATION_FAILED: "
-                "text card must be text"
-            )
-
-        if not card.strip():
-
-            raise RuntimeError(
-                "CONTENT_VALIDATION_FAILED: "
-                "empty text card"
-            )
-
-        if len(card.strip()) > 80:
-
-            raise RuntimeError(
-                "CONTENT_VALIDATION_FAILED: "
-                "text card is too long"
-            )
-
-    if not content[
-        "image_prompt"
-    ].strip():
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as error:
+        print("Invalid Gemini response:")
+        print(text)
 
         raise RuntimeError(
-            "CONTENT_VALIDATION_FAILED: "
-            "image prompt missing"
+            "GEMINI_JSON_FAILED: " +
+            str(error)
         )
+
+
+def generate_content(target_date):
+    prompt = build_prompt(
+        target_date
+    )
+
+    last_error = None
+
+    for model in MODELS:
+        print(
+            f"Generating content with Gemini model: {model}"
+        )
+
+        for attempt in range(3):
+            try:
+                response_text = call_gemini(
+                    model,
+                    prompt
+                )
+
+                data = parse_json_response(
+                    response_text
+                )
+
+                data = validate_content(
+                    data
+                )
+
+                print(
+                    "Content generated and validated successfully."
+                )
+
+                print(
+                    "VOICE SCRIPT:"
+                )
+                print(
+                    data["voice_script"]
+                )
+
+                return data
+
+            except Exception as error:
+                last_error = error
+
+                print(
+                    f"Gemini attempt {attempt + 1}/3 failed:"
+                )
+                print(
+                    str(error)
+                )
+
+                # Retry temporary server/API errors.
+                if (
+                    "503" in str(error)
+                    or "429" in str(error)
+                    or "500" in str(error)
+                    or "502" in str(error)
+                    or "504" in str(error)
+                ):
+                    time.sleep(
+                        5 * (attempt + 1)
+                    )
+                    continue
+
+                # Content/validation errors should try
+                # the next model rather than looping forever.
+                break
+
+    raise RuntimeError(
+        "CONTENT_GENERATION_FAILED: "
+        + str(last_error)
+    )
