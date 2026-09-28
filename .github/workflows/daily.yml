@@ -39,13 +39,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Verify Piper
+      - name: Verify Piper installation
         run: |
-          piper --version
+          piper --help
 
-      - name: Verify Telugu Piper voice
+      - name: Test Piper Telugu voice
         run: |
-          echo "Telugu Piper voice: te_IN-maya-medium"
+          mkdir -p output
+          echo "నమస్కారం. ఓం నమః శివాయ." | \
+            piper \
+            --model te_IN-maya-medium \
+            --output_file output/piper_test.wav
+
+          test -s output/piper_test.wav
 
       - name: Run automation test
         env:
