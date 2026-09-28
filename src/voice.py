@@ -10,9 +10,7 @@ VOICE_MP3 = OUTPUT_DIR / "voice.mp3"
 
 NARRATION_WAV = OUTPUT_DIR / "narration.wav"
 CHANT_WAV = OUTPUT_DIR / "chant.wav"
-MUSIC_WAV = OUTPUT_DIR / "devotional_music.wav"
 
-# Piper voice downloaded by GitHub Actions
 PIPER_MODEL = "piper_voices/te_IN-maya-medium.onnx"
 
 
@@ -41,7 +39,6 @@ def run_command(command, error_name):
     if result.returncode != 0:
         print(result.stdout)
         print(result.stderr)
-
         raise RuntimeError(
             f"{error_name}: command failed"
         )
@@ -111,9 +108,7 @@ def create_piper_audio(text, output_path):
 
 
 def create_narration(text):
-    print(
-        "Generating Telugu neural narration..."
-    )
+    print("Generating Telugu neural narration...")
 
     create_piper_audio(
         text,
@@ -124,17 +119,16 @@ def create_narration(text):
 
 
 def create_chant_audio():
-    print(
-        "Generating devotional mantra track..."
-    )
+    print("Generating clean devotional chant...")
 
     chant_source = (
         OUTPUT_DIR /
         "chant_source.wav"
     )
 
+    # Deliberately no echo/reverb.
+    # Clean repeated mantra with slower timing.
     mantra = (
-        "ఓం నమః శివాయ. "
         "ఓం నమః శివాయ. "
         "ఓం నమః శివాయ. "
         "ఓం నమః శివాయ."
@@ -145,39 +139,31 @@ def create_chant_audio():
         chant_source
     )
 
-    # Slow down slightly, add reverb/echo and lower
-    # the volume so it behaves more like a background
-    # devotional chant instead of normal narration.
     run_command(
         [
             "ffmpeg",
             "-y",
-
             "-i",
             str(chant_source),
 
             "-filter_complex",
             (
                 "[0:a]"
-                "asetrate=22050*0.94,"
+                "asetrate=22050*0.93,"
                 "aresample=48000,"
-                "atempo=0.86,"
-                "aecho=0.8:0.75:120|240:0.32|0.18,"
-                "highpass=f=80,"
-                "lowpass=f=5000,"
-                "volume=0.62"
+                "atempo=0.93,"
+                "highpass=f=70,"
+                "lowpass=f=6000,"
+                "volume=0.38"
                 "[chant]"
             ),
 
             "-map",
             "[chant]",
-
             "-ar",
             "48000",
-
             "-ac",
             "2",
-
             str(CHANT_WAV),
         ],
         "CHANT_PROCESSING_FAILED",
@@ -189,93 +175,6 @@ def create_chant_audio():
     )
 
     return CHANT_WAV
-
-
-def create_devotional_music(duration):
-    print(
-        "Generating devotional background ambience..."
-    )
-
-    duration = max(
-        15,
-        min(int(duration) + 8, 120)
-    )
-
-    run_command(
-        [
-            "ffmpeg",
-            "-y",
-
-            "-f",
-            "lavfi",
-            "-t",
-            str(duration),
-            "-i",
-            "sine=frequency=110:sample_rate=48000",
-
-            "-f",
-            "lavfi",
-            "-t",
-            str(duration),
-            "-i",
-            "sine=frequency=220:sample_rate=48000",
-
-            "-f",
-            "lavfi",
-            "-t",
-            str(duration),
-            "-i",
-            "sine=frequency=330:sample_rate=48000",
-
-            "-filter_complex",
-            (
-                "[0:a]"
-                "volume=0.045"
-                "[a];"
-
-                "[1:a]"
-                "volume=0.028"
-                "[b];"
-
-                "[2:a]"
-                "volume=0.018"
-                "[c];"
-
-                "[a][b][c]"
-                "amix=inputs=3:"
-                "duration=longest:"
-                "normalize=0,"
-                "lowpass=f=1200,"
-                "aformat="
-                "sample_rates=48000:"
-                "channel_layouts=stereo,"
-                "afade=t=in:st=0:d=2,"
-                f"afade=t=out:"
-                f"st={max(2, duration - 3)}:"
-                "d=3"
-                "[music]"
-            ),
-
-            "-map",
-            "[music]",
-
-            "-ar",
-            "48000",
-
-            "-ac",
-            "2",
-
-            str(MUSIC_WAV),
-        ],
-        "MUSIC_GENERATION_FAILED",
-    )
-
-    validate_audio(
-        MUSIC_WAV,
-        10000
-    )
-
-    return MUSIC_WAV
 
 
 def get_duration(audio_path):
@@ -300,31 +199,36 @@ def get_duration(audio_path):
             result.stdout.strip()
         )
 
-        if duration <= 0:
-            raise ValueError
-
-        return duration
+        if duration > 0:
+            return duration
 
     except Exception:
-        return 20.0
+        pass
+
+    return 20.0
 
 
 def create_final_audio(
     narration,
     chant
 ):
-    print(
-        "Mixing narration + mantra + background music..."
-    )
+    print("Mixing clean devotional audio...")
 
-    duration = get_duration(
+    narration_duration = get_duration(
         narration
     )
 
-    music = create_devotional_music(
-        duration + 12
+    chant_duration = get_duration(
+        chant
     )
 
+    total_duration = max(
+        narration_duration,
+        chant_duration
+    )
+
+    # No synthetic background noise/music.
+    # Only clean Telugu narration + low-volume chant.
     run_command(
         [
             "ffmpeg",
@@ -336,12 +240,8 @@ def create_final_audio(
             "-i",
             str(chant),
 
-            "-i",
-            str(music),
-
             "-filter_complex",
             (
-                # Main Telugu narration
                 "[0:a]"
                 "aformat="
                 "sample_rates=48000:"
@@ -349,27 +249,18 @@ def create_final_audio(
                 "volume=1.0"
                 "[n];"
 
-                # Chant kept clearly below narration
                 "[1:a]"
                 "aformat="
                 "sample_rates=48000:"
                 "channel_layouts=stereo,"
-                "volume=0.52"
+                "volume=0.32"
                 "[c];"
 
-                # Very low devotional ambience
-                "[2:a]"
-                "aformat="
-                "sample_rates=48000:"
-                "channel_layouts=stereo,"
-                "volume=0.42"
-                "[m];"
-
-                "[n][c][m]"
+                "[n][c]"
                 "amix="
-                "inputs=3:"
-                "duration=longest:"
-                "dropout_transition=2,"
+                "inputs=2:"
+                "duration=first:"
+                "dropout_transition=1,"
                 "loudnorm="
                 "I=-16:"
                 "TP=-1.5:"
@@ -382,9 +273,11 @@ def create_final_audio(
 
             "-ar",
             "48000",
-
             "-ac",
             "2",
+
+            "-t",
+            str(total_duration),
 
             str(VOICE_WAV),
         ],
@@ -400,16 +293,12 @@ def create_final_audio(
         [
             "ffmpeg",
             "-y",
-
             "-i",
             str(VOICE_WAV),
-
             "-codec:a",
             "libmp3lame",
-
             "-b:a",
             "192k",
-
             str(VOICE_MP3),
         ],
         "VOICE_MP3_FAILED",
@@ -420,9 +309,7 @@ def create_final_audio(
         5000
     )
 
-    print(
-        "Audio creation completed."
-    )
+    print("Clean devotional audio created.")
 
     return str(VOICE_WAV)
 
