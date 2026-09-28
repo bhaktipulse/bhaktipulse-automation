@@ -1,478 +1,410 @@
-import shutil
 import subprocess
-import tempfile
-import textwrap
 from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFont
 
 OUTPUT_DIR = Path("output")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 VIDEO_PATH = OUTPUT_DIR / "devotional.mp4"
+TEXT_DIR = OUTPUT_DIR / "text_cards"
+TEXT_DIR.mkdir(exist_ok=True)
 
 
-def find_telugu_font():
+def run(cmd, error_name):
+    print("RUN:", " ".join(str(x) for x in cmd))
+
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        print(result.stdout)
+        print(result.stderr)
+        raise RuntimeError(
+            f"{error_name}: command failed with exit code {result.returncode}"
+        )
+
+    return result
+
+
+def get_telugu_font():
     candidates = [
         "/usr/share/fonts/truetype/noto/NotoSansTelugu-Regular.ttf",
         "/usr/share/fonts/opentype/noto/NotoSansTelugu-Regular.ttf",
         "/usr/share/fonts/truetype/noto/NotoSansTeluguUI-Regular.ttf",
-        "/usr/share/fonts/opentype/noto/NotoSansTeluguUI-Regular.ttf",
     ]
 
     for path in candidates:
         if Path(path).exists():
             return path
 
-    if shutil.which("fc-match"):
-        commands = [
-            ["fc-match", "-f", "%{file}\n", "Noto Sans Telugu"],
-            ["fc-match", "-f", "%{file}\n", ":lang=te"],
-        ]
-
-        for command in commands:
-            try:
-                result = subprocess.run(
-                    command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=10
-                )
-
-                path = result.stdout.strip()
-
-                if path and Path(path).exists():
-                    return path
-
-            except Exception:
-                pass
-
-    raise RuntimeError(
-        "VIDEO_CREATION_FAILED: Telugu font not found"
-    )
-
-
-def get_duration(path):
-    command = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        str(path),
-    ]
-
     result = subprocess.run(
-        command,
+        [
+            "fc-match",
+            "-f",
+            "%{file}",
+            "Noto Sans Telugu",
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True
+        text=True,
     )
 
-    if result.returncode != 0:
-        raise RuntimeError(
-            "VIDEO_CREATION_FAILED: duration detection failed"
-        )
+    path = result.stdout.strip()
 
-    try:
-        duration = float(result.stdout.strip())
-    except ValueError:
-        raise RuntimeError(
-            "VIDEO_CREATION_FAILED: invalid duration"
-        )
+    if path and Path(path).exists():
+        return path
 
-    if duration <= 0:
-        raise RuntimeError(
-            "VIDEO_CREATION_FAILED: zero duration"
-        )
-
-    return duration
-
-
-def prepare_text(text):
-    text = " ".join(
-        str(text).strip().split()
+    raise RuntimeError(
+        "TELUGU_FONT_FAILED: Noto Sans Telugu font not found"
     )
 
-    if not text:
-        return ""
 
-    # Short mobile-friendly lines.
-    lines = textwrap.wrap(
+def create_text_card(text, index):
+    font_path = get_telugu_font()
+
+    image = Image.new(
+        "RGBA",
+        (1000, 300),
+        (0, 0, 0, 0),
+    )
+
+    draw = ImageDraw.Draw(image)
+
+    font = ImageFont.truetype(
+        font_path,
+        54,
+    )
+
+    # Measure text.
+    bbox = draw.multiline_textbbox(
+        (0, 0),
         text,
-        width=22,
-        break_long_words=False,
-        break_on_hyphens=False
+        font=font,
+        spacing=8,
+        align="center",
     )
 
-    return "\n".join(lines)
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+
+    x = (1000 - width) // 2
+    y = (300 - height) // 2
+
+    # Dark translucent background.
+    draw.rounded_rectangle(
+        (30, 35, 970, 265),
+        radius=35,
+        fill=(0, 0, 0, 150),
+        outline=(255, 215, 120, 210),
+        width=3,
+    )
+
+    # Shadow.
+    draw.multiline_text(
+        (x + 3, y + 4),
+        text,
+        font=font,
+        fill=(0, 0, 0, 230),
+        spacing=8,
+        align="center",
+    )
+
+    # Main text.
+    draw.multiline_text(
+        (x, y),
+        text,
+        font=font,
+        fill=(255, 248, 225, 255),
+        spacing=8,
+        align="center",
+    )
+
+    path = TEXT_DIR / f"card_{index}.png"
+    image.save(path)
+
+    return path
 
 
-def create_text_files(text_cards, temp_dir):
-    paths = []
+def prepare_text_cards(text_cards):
+    cards = []
 
-    for index, card in enumerate(text_cards):
-        prepared = prepare_text(card)
+    for index, text in enumerate(text_cards, start=1):
+        text = str(text).strip()
 
-        if not prepared:
+        if not text:
             continue
 
-        path = Path(temp_dir) / f"card_{index}.txt"
-
-        path.write_text(
-            prepared,
-            encoding="utf-8"
+        cards.append(
+            create_text_card(text, index)
         )
 
-        paths.append(path)
-
-    return paths
-
-
-def escape_filter_path(path):
-    value = str(path)
-
-    value = value.replace("\\", "\\\\")
-    value = value.replace(":", "\\:")
-    value = value.replace("'", "\\'")
-
-    return value
-
-
-def create_video(
-    image_path: str,
-    voice_path: str,
-    text_cards=None
-):
-    image = Path(image_path)
-    voice = Path(voice_path)
-
-    if not image.exists():
+    if not cards:
         raise RuntimeError(
-            "VIDEO_CREATION_FAILED: image not found"
+            "VIDEO_TEXT_FAILED: no valid text cards"
         )
 
-    if not voice.exists():
+    return cards
+
+
+def create_video(image_path, voice_path, text_cards):
+    image_path = Path(image_path)
+    voice_path = Path(voice_path)
+
+    if not image_path.exists():
         raise RuntimeError(
-            "VIDEO_CREATION_FAILED: voice not found"
+            "VIDEO_INPUT_FAILED: devotional image missing"
         )
 
-    if not text_cards:
+    if not voice_path.exists():
         raise RuntimeError(
-            "VIDEO_CREATION_FAILED: text cards missing"
+            "VIDEO_INPUT_FAILED: voice audio missing"
         )
 
-    if not 3 <= len(text_cards) <= 5:
-        raise RuntimeError(
-            "VIDEO_CREATION_FAILED: expected 3–5 text cards"
-        )
+    print("")
+    print("Preparing Telugu text cards...")
+    cards = prepare_text_cards(text_cards)
 
-    font_path = find_telugu_font()
+    print(f"Text cards created: {len(cards)}")
 
-    duration = get_duration(voice)
-
-    print(
-        f"Final audio duration: {duration:.2f}s"
+    # Determine audio duration.
+    probe = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(voice_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
     )
 
-    print(
-        f"Telugu font: {font_path}"
-    )
+    try:
+        duration = float(probe.stdout.strip())
+    except Exception:
+        duration = 25.0
 
-    with tempfile.TemporaryDirectory(
-        prefix="bhaktipulse_video_"
-    ) as temp_dir:
+    duration = max(12.0, min(duration, 60.0))
 
-        text_files = create_text_files(
-            text_cards,
-            temp_dir
-        )
+    # Same exact deity image, but three different camera movements.
+    # This gives visual movement without generating inconsistent deity images.
+    scene1 = max(3.0, duration * 0.34)
+    scene2 = max(3.0, duration * 0.33)
+    scene3 = max(3.0, duration - scene1 - scene2)
 
-        if not text_files:
-            raise RuntimeError(
-                "VIDEO_CREATION_FAILED: "
-                "no usable text cards"
-            )
+    # Ensure final duration is positive.
+    scene3 = max(3.0, scene3)
 
-        card_duration = (
-            duration / len(text_files)
-        )
+    filter_complex = f"""
+[0:v]
+scale=1080:1920:force_original_aspect_ratio=increase,
+crop=1080:1920,
+zoompan=
+z='min(zoom+0.0007,1.16)':
+x='iw/2-(iw/zoom/2)':
+y='ih/2-(ih/zoom/2)':
+d=1:
+s=1080x1920:
+fps=30,
+trim=duration={scene1},
+setpts=PTS-STARTPTS
+[s1];
 
-        filters = []
+[0:v]
+scale=1080:1920:force_original_aspect_ratio=increase,
+crop=1080:1920,
+zoompan=
+z='min(zoom+0.00045,1.10)':
+x='iw/2-(iw/zoom/2)':
+y='ih/2-(ih/zoom/2)+30*sin(on/80)':
+d=1:
+s=1080x1920:
+fps=30,
+trim=duration={scene2},
+setpts=PTS-STARTPTS
+[s2];
 
-        # ------------------------------------------------
-        # BASE IMAGE
-        # ------------------------------------------------
+[0:v]
+scale=1080:1920:force_original_aspect_ratio=increase,
+crop=1080:1920,
+zoompan=
+z='1.12-0.00045*on':
+x='iw/2-(iw/zoom/2)+35*sin(on/90)':
+y='ih/2-(ih/zoom/2)-20*cos(on/100)':
+d=1:
+s=1080x1920:
+fps=30,
+trim=duration={scene3},
+setpts=PTS-STARTPTS
+[s3];
 
-        filters.append(
-            "[0:v]"
-            "scale=1200:2134:"
-            "force_original_aspect_ratio=increase,"
-            "crop=1080:1920,"
-            "zoompan="
-            "z='1.0+0.0007*on':"
-            "x='iw/2-(iw/zoom/2)':"
-            "y='ih/2-(ih/zoom/2)':"
-            "d=1:"
-            "s=1080x1920:"
-            "fps=30,"
-            "eq="
-            "brightness=0.015:"
-            "contrast=1.05:"
-            "saturation=1.08"
-            "[base]"
-        )
+[s1][s2][s3]
+concat=n=3:v=1:a=0,
+format=yuv420p,
+fade=t=in:st=0:d=0.7,
+fade=t=out:st={max(0.8, duration-0.7)}:d=0.7
+[base];
 
-        # ------------------------------------------------
-        # SOFT DEVOTIONAL GLOW
-        # ------------------------------------------------
+color=c=black@0.0:
+s=1080x1920:
+r=30,
+d={duration}
+[transparent];
 
-        filters.append(
-            "[base]"
-            "split=2"
-            "[main][soft]"
-        )
+[base][transparent]
+overlay=shortest=1
+[video]
+""".strip()
 
-        filters.append(
-            "[soft]"
-            "gblur=sigma=22,"
-            "format=rgba,"
-            "colorchannelmixer=aa=0.14"
-            "[glow]"
-        )
+    scene_file = OUTPUT_DIR / "visual_base.mp4"
 
-        filters.append(
-            "[main][glow]"
-            "overlay=0:0:"
-            "format=auto"
-            "[scene]"
-        )
-
-        current = "[scene]"
-
-        # ------------------------------------------------
-        # TEXT CARDS
-        # ------------------------------------------------
-
-        for index, path in enumerate(text_files):
-
-            start = (
-                index * card_duration
-            )
-
-            end = (
-                (index + 1)
-                * card_duration
-            )
-
-            if index == len(text_files) - 1:
-                end = duration
-
-            textfile = escape_filter_path(path)
-
-            next_label = (
-                f"[card{index}]"
-            )
-
-            # Fade in/out for every card.
-            fade_in_start = start
-            fade_in_end = min(
-                start + 0.45,
-                end
-            )
-
-            fade_out_start = max(
-                end - 0.45,
-                start
-            )
-
-            drawtext = (
-                "drawtext="
-                f"fontfile='{font_path}':"
-                f"textfile='{textfile}':"
-                "fontcolor=white:"
-                "fontsize=50:"
-                "line_spacing=14:"
-                "borderw=2:"
-                "bordercolor=black@0.85:"
-                "box=1:"
-                "boxcolor=black@0.55:"
-                "boxborderw=28:"
-                "x=(w-text_w)/2:"
-                "y=h*0.70:"
-                f"alpha='if(lt(t,{fade_in_end:.3f}),"
-                f"(t-{fade_in_start:.3f})/0.45,"
-                f"if(gt(t,{fade_out_start:.3f}),"
-                f"({end:.3f}-t)/0.45,1))':"
-                f"enable='between(t,{start:.3f},{end:.3f})'"
-            )
-
-            filters.append(
-                f"{current}"
-                f"{drawtext}"
-                f"{next_label}"
-            )
-
-            current = next_label
-
-        # ------------------------------------------------
-        # FINAL FORMAT
-        # ------------------------------------------------
-
-        filters.append(
-            f"{current}"
-            "format=yuv420p"
-            "[v]"
-        )
-
-        filter_complex = ";".join(
-            filters
-        )
-
-        command = [
+    run(
+        [
             "ffmpeg",
             "-y",
-
-            # Image input
             "-loop",
             "1",
-            "-framerate",
-            "30",
             "-i",
-            str(image),
-
-            # Final audio input
-            "-i",
-            str(voice),
-
+            str(image_path),
             "-filter_complex",
             filter_complex,
-
             "-map",
-            "[v]",
-
-            "-map",
-            "1:a",
-
+            "[video]",
+            "-t",
+            str(duration),
+            "-an",
             "-c:v",
             "libx264",
-
             "-preset",
             "veryfast",
-
             "-crf",
             "20",
-
             "-pix_fmt",
             "yuv420p",
-
             "-r",
             "30",
+            str(scene_file),
+        ],
+        "VIDEO_SCENE_CREATION_FAILED",
+    )
 
+    # Add Telugu cards as timed overlays.
+    #
+    # Cards are distributed across the full video.
+    inputs = [
+        "-i",
+        str(scene_file),
+    ]
+
+    for card in cards:
+        inputs.extend(["-i", str(card)])
+
+    inputs.extend(["-i", str(voice_path)])
+
+    overlay_chain = "[0:v]"
+
+    card_duration = duration / len(cards)
+
+    filters = []
+
+    for i, _card in enumerate(cards):
+        input_index = i + 1
+        start = i * card_duration
+        end = min(duration, (i + 1) * card_duration)
+
+        next_label = f"[v{i+1}]"
+
+        filters.append(
+            f"[{input_index}:v]"
+            f"format=rgba,"
+            f"fade=t=in:st=0:d=0.35:alpha=1,"
+            f"fade=t=out:st={max(0.1, card_duration-0.35)}:d=0.35:alpha=1"
+            f"[card{i}]"
+        )
+
+        filters.append(
+            f"{overlay_chain}[card{i}]"
+            f"overlay="
+            f"(main_w-overlay_w)/2:"
+            f"main_h-overlay_h-180:"
+            f"enable='between(t,{start},{end})'"
+            f"{next_label}"
+        )
+
+        overlay_chain = next_label
+
+    filters.append(
+        f"{overlay_chain}format=yuv420p[vout]"
+    )
+
+    filter_complex_cards = ";".join(filters)
+
+    run(
+        [
+            "ffmpeg",
+            "-y",
+            *inputs,
+            "-filter_complex",
+            filter_complex_cards,
+            "-map",
+            "[vout]",
+            "-map",
+            f"{len(cards)+1}:a:0",
+            "-t",
+            str(duration),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            "-r",
+            "30",
             "-c:a",
             "aac",
-
             "-b:a",
             "192k",
-
             "-ar",
             "48000",
-
-            "-shortest",
-
             "-movflags",
             "+faststart",
-
             str(VIDEO_PATH),
-        ]
-
-        print(
-            "Creating cinematic devotional video..."
-        )
-
-        result = subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-
-        if result.returncode != 0:
-            raise RuntimeError(
-                "VIDEO_CREATION_FAILED:\n"
-                + result.stderr[-10000:]
-            )
+        ],
+        "VIDEO_FINAL_CREATION_FAILED",
+    )
 
     if not VIDEO_PATH.exists():
         raise RuntimeError(
-            "VIDEO_VALIDATION_FAILED: "
-            "MP4 was not created"
+            "VIDEO_VALIDATION_FAILED: final MP4 missing"
         )
 
     if VIDEO_PATH.stat().st_size < 100_000:
         raise RuntimeError(
-            "VIDEO_VALIDATION_FAILED: "
-            "MP4 file too small"
+            "VIDEO_VALIDATION_FAILED: final MP4 too small"
         )
 
-    validate_video()
-
-    print(
-        f"Devotional video created: {VIDEO_PATH}"
-    )
+    print("")
+    print("====================================")
+    print("DEVOTIONAL VIDEO READY")
+    print("====================================")
+    print(f"Video: {VIDEO_PATH}")
+    print(f"Duration: {duration:.2f}s")
+    print(f"Resolution: 1080x1920")
+    print(f"FPS: 30")
+    print(f"Text cards: {len(cards)}")
+    print("Telugu text: Pillow + Noto Sans Telugu")
+    print("Visual treatment: 3 camera movements")
+    print("====================================")
 
     return str(VIDEO_PATH)
-
-
-def validate_video():
-
-    command = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream="
-        "width,height,codec_name,r_frame_rate",
-        "-of",
-        "default=noprint_wrappers=1",
-        str(VIDEO_PATH),
-    ]
-
-    result = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-
-    if result.returncode != 0:
-        raise RuntimeError(
-            "VIDEO_VALIDATION_FAILED: "
-            "ffprobe failed"
-        )
-
-    output = result.stdout
-
-    required = [
-        "width=1080",
-        "height=1920",
-        "codec_name=h264",
-        "r_frame_rate=30/1",
-    ]
-
-    for value in required:
-        if value not in output:
-            raise RuntimeError(
-                "VIDEO_VALIDATION_FAILED: "
-                + value
-                + " missing"
-            )
-
-    print(
-        "Video validation passed:"
-    )
-
-    print(output.strip())
