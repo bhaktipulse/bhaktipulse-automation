@@ -15,30 +15,6 @@ MUSIC_WAV = OUTPUT_DIR / "devotional_music.wav"
 PIPER_MODEL = "te_IN-maya-medium"
 
 
-def run(cmd, error_name):
-    print("RUN:", " ".join(str(x) for x in cmd))
-
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-
-    if result.returncode != 0:
-        print(result.stdout)
-        print(result.stderr)
-        raise RuntimeError(
-            f"{error_name}: command failed with exit code {result.returncode}"
-        )
-
-    return result
-
-
-def clean_text(text):
-    return " ".join(str(text).strip().split())
-
-
 def validate_audio(path, minimum_size=10000):
     path = Path(path)
 
@@ -51,35 +27,45 @@ def validate_audio(path, minimum_size=10000):
         )
 
 
+def run_command(command, error_name):
+    result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        print(result.stdout)
+        print(result.stderr)
+        raise RuntimeError(
+            f"{error_name}: command failed"
+        )
+
+    return result
+
+
+def clean_text(text):
+    return " ".join(str(text).strip().split())
+
+
 def create_piper_audio(text, output_path):
     text = clean_text(text)
 
     if not text:
-        raise RuntimeError("VOICE_GENERATION_FAILED: empty text")
+        raise RuntimeError(
+            "VOICE_GENERATION_FAILED: empty text"
+        )
 
     piper = shutil.which("piper")
 
     if not piper:
         raise RuntimeError(
-            "VOICE_GENERATION_FAILED: piper executable not found"
+            "VOICE_GENERATION_FAILED: piper not found"
         )
 
     output_path = Path(output_path)
 
-    # Piper automatically downloads the requested voice model
-    # when the model name is supplied.
-    run(
-        [
-            piper,
-            "--model",
-            PIPER_MODEL,
-            "--output_file",
-            str(output_path),
-        ],
-        "PIPER_TTS_FAILED",
-    ) if False else None
-
-    # Feed Telugu text through stdin.
     result = subprocess.run(
         [
             piper,
@@ -107,33 +93,20 @@ def create_piper_audio(text, output_path):
 
 
 def create_narration(text):
-    print("")
-    print("Generating Telugu neural narration with Piper...")
-    print(f"Voice model: {PIPER_MODEL}")
+    print("Generating Telugu neural narration...")
 
-    create_piper_audio(text, NARRATION_WAV)
-
-    validate_audio(NARRATION_WAV)
+    create_piper_audio(
+        text,
+        NARRATION_WAV
+    )
 
     return NARRATION_WAV
 
 
 def create_chant_audio():
-    """
-    Creates a separate mantra track.
+    print("Generating Shiva mantra track...")
 
-    This is deliberately treated differently from narration:
-    - slower tempo
-    - lower pitch
-    - repeated mantra
-    - pauses
-    - echo/reverb
-    """
-
-    print("")
-    print("Generating devotional mantra track...")
-
-    source = OUTPUT_DIR / "chant_source.wav"
+    chant_source = OUTPUT_DIR / "chant_source.wav"
 
     mantra = (
         "ఓం నమః శివాయ. "
@@ -141,15 +114,17 @@ def create_chant_audio():
         "ఓం నమః శివాయ."
     )
 
-    create_piper_audio(mantra, source)
+    create_piper_audio(
+        mantra,
+        chant_source
+    )
 
-    # Slow down + slightly lower pitch + echo/reverb.
-    run(
+    run_command(
         [
             "ffmpeg",
             "-y",
             "-i",
-            str(source),
+            str(chant_source),
             "-filter_complex",
             (
                 "[0:a]"
@@ -157,7 +132,7 @@ def create_chant_audio():
                 "aresample=48000,"
                 "atempo=0.86,"
                 "aecho=0.8:0.75:90|180:0.28|0.14,"
-                "volume=0.72"
+                "volume=0.70"
                 "[chant]"
             ),
             "-map",
@@ -176,57 +151,53 @@ def create_chant_audio():
     return CHANT_WAV
 
 
-def create_devotional_music(duration_seconds):
-    """
-    Copyright-safe procedural devotional ambience.
-
-    It is intentionally subtle so it supports the voice instead
-    of competing with the narration.
-    """
-
-    print("")
+def create_devotional_music(duration):
     print("Generating devotional background ambience...")
 
-    duration_seconds = max(15, min(int(duration_seconds) + 5, 120))
+    duration = max(15, min(int(duration) + 5, 120))
 
-    # Layered sustained tones create a soft drone/pad.
-    filter_complex = (
-        "[0:a]volume=0.055[a];"
-        "[1:a]volume=0.035[b];"
-        "[2:a]volume=0.025[c];"
-        "[a][b][c]"
-        "amix=inputs=3:duration=longest:normalize=0,"
-        "lowpass=f=1200,"
-        "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
-        f"afade=t=in:st=0:d=2,"
-        f"afade=t=out:st={max(2, duration_seconds - 3)}:d=3"
-        "[music]"
-    )
-
-    run(
+    run_command(
         [
             "ffmpeg",
             "-y",
+
             "-f",
             "lavfi",
             "-t",
-            str(duration_seconds),
+            str(duration),
             "-i",
             "sine=frequency=110:sample_rate=48000",
+
             "-f",
             "lavfi",
             "-t",
-            str(duration_seconds),
+            str(duration),
             "-i",
             "sine=frequency=220:sample_rate=48000",
+
             "-f",
             "lavfi",
             "-t",
-            str(duration_seconds),
+            str(duration),
             "-i",
             "sine=frequency=330:sample_rate=48000",
+
             "-filter_complex",
-            filter_complex,
+            (
+                "[0:a]volume=0.055[a];"
+                "[1:a]volume=0.035[b];"
+                "[2:a]volume=0.025[c];"
+                "[a][b][c]"
+                "amix=inputs=3:duration=longest:normalize=0,"
+                "lowpass=f=1200,"
+                "aformat="
+                "sample_rates=48000:"
+                "channel_layouts=stereo,"
+                "afade=t=in:st=0:d=2,"
+                f"afade=t=out:st={max(2, duration - 3)}:d=3"
+                "[music]"
+            ),
+
             "-map",
             "[music]",
             "-ar",
@@ -243,14 +214,8 @@ def create_devotional_music(duration_seconds):
     return MUSIC_WAV
 
 
-def create_final_audio(narration_path, chant_path):
-    print("")
-    print("Mixing narration + chant + devotional ambience...")
-
-    narration_path = Path(narration_path)
-    chant_path = Path(chant_path)
-
-    narration_probe = subprocess.run(
+def get_duration(audio_path):
+    result = subprocess.run(
         [
             "ffprobe",
             "-v",
@@ -259,7 +224,7 @@ def create_final_audio(narration_path, chant_path):
             "format=duration",
             "-of",
             "default=noprint_wrappers=1:nokey=1",
-            str(narration_path),
+            str(audio_path),
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -267,48 +232,62 @@ def create_final_audio(narration_path, chant_path):
     )
 
     try:
-        narration_duration = float(narration_probe.stdout.strip())
+        return float(result.stdout.strip())
     except Exception:
-        narration_duration = 20.0
+        return 20.0
 
-    music_path = create_devotional_music(narration_duration + 12)
 
-    # Chant starts after narration.
-    # Music runs underneath the whole track.
-    #
-    # Voice is kept dominant.
-    run(
+def create_final_audio(narration, chant):
+    print("Mixing narration + mantra + background music...")
+
+    duration = get_duration(narration)
+
+    music = create_devotional_music(
+        duration + 12
+    )
+
+    run_command(
         [
             "ffmpeg",
             "-y",
+
             "-i",
-            str(narration_path),
+            str(narration),
+
             "-i",
-            str(chant_path),
+            str(chant),
+
             "-i",
-            str(music_path),
+            str(music),
+
             "-filter_complex",
             (
                 "[0:a]"
-                "aformat=sample_rates=48000:channel_layouts=stereo,"
+                "aformat=sample_rates=48000:"
+                "channel_layouts=stereo,"
                 "volume=1.0"
                 "[n];"
 
                 "[1:a]"
-                "aformat=sample_rates=48000:channel_layouts=stereo,"
+                "aformat=sample_rates=48000:"
+                "channel_layouts=stereo,"
                 "volume=0.70"
                 "[c];"
 
                 "[2:a]"
-                "aformat=sample_rates=48000:channel_layouts=stereo,"
+                "aformat=sample_rates=48000:"
+                "channel_layouts=stereo,"
                 "volume=0.55"
                 "[m];"
 
                 "[n][c][m]"
-                "amix=inputs=3:duration=longest:dropout_transition=2,"
+                "amix=inputs=3:"
+                "duration=longest:"
+                "dropout_transition=2,"
                 "loudnorm=I=-16:TP=-1.5:LRA=7"
                 "[out]"
             ),
+
             "-map",
             "[out]",
             "-ar",
@@ -320,9 +299,12 @@ def create_final_audio(narration_path, chant_path):
         "AUDIO_MIX_FAILED",
     )
 
-    validate_audio(VOICE_WAV, 20000)
+    validate_audio(
+        VOICE_WAV,
+        20000
+    )
 
-    run(
+    run_command(
         [
             "ffmpeg",
             "-y",
@@ -334,34 +316,31 @@ def create_final_audio(narration_path, chant_path):
             "192k",
             str(VOICE_MP3),
         ],
-        "VOICE_MP3_CREATION_FAILED",
+        "VOICE_MP3_FAILED",
     )
 
-    validate_audio(VOICE_MP3, 5000)
+    validate_audio(
+        VOICE_MP3,
+        5000
+    )
 
-    print("")
-    print("====================================")
-    print("DEVOTIONAL AUDIO READY")
-    print("====================================")
-    print(f"Narration : {narration_path}")
-    print(f"Chant     : {chant_path}")
-    print(f"Music     : {music_path}")
-    print(f"Final WAV : {VOICE_WAV}")
-    print(f"Final MP3 : {VOICE_MP3}")
-    print("====================================")
+    print("Audio creation completed.")
 
-    return VOICE_WAV
+    return str(VOICE_WAV)
 
 
-def generate_voice(text: str):
+def generate_voice(text):
     text = clean_text(text)
 
     if not text:
         raise RuntimeError(
-            "VOICE_GENERATION_FAILED: voice script is empty"
+            "VOICE_GENERATION_FAILED: empty voice script"
         )
 
     narration = create_narration(text)
     chant = create_chant_audio()
 
-    return str(create_final_audio(narration, chant))
+    return create_final_audio(
+        narration,
+        chant
+    )
